@@ -2,12 +2,15 @@ import numpy as np
 import librosa
 import soundfile as sf
 
+import torch
 import matplotlib.pyplot as plt
 
 from absl import flags
 FLAGS = flags.FLAGS
 flags.DEFINE_boolean('mel_spectrogram', False, 'use mel spectrogram features instead of mfccs for audio')
-flags.DEFINE_boolean('renormalize_volume', False, 'normalize audio of each example')
+flags.DEFINE_string('normalizers_file', 'normalizers.pkl', 'file with pickled feature normalizers')
+
+phoneme_inventory = ['aa','ae','ah','ao','aw','ax','axr','ay','b','ch','d','dh','dx','eh','el','em','en','er','ey','f','g','hh','hv','ih','iy','jh','k','l','m','n','nx','ng','ow','oy','p','r','s','sh','t','th','uh','uw','v','w','y','z','zh','sil']
 
 def normalize_volume(audio):
     rms = librosa.feature.rms(audio)
@@ -19,7 +22,7 @@ def normalize_volume(audio):
         audio = audio / max_val
     return audio
 
-def load_audio(filename, start=None, end=None, max_frames=None):
+def load_audio(filename, start=None, end=None, max_frames=None, renormalize_volume=False):
     audio, r = sf.read(filename)
     assert r == 16000
 
@@ -28,7 +31,7 @@ def load_audio(filename, start=None, end=None, max_frames=None):
     if start is not None or end is not None:
         audio = audio[start:end]
 
-    if FLAGS.renormalize_volume:
+    if renormalize_volume:
         audio = normalize_volume(audio)
     if FLAGS.mel_spectrogram:
         mfccs = librosa.feature.melspectrogram(audio, sr=16000, n_mels=128, center=False, n_fft=512, win_length=432, hop_length=160).T
@@ -134,11 +137,15 @@ class FeatureNormalizer(object):
         sample = sample + self.feature_means
         return sample
 
-def split_fixed_length(tensor, length):
-    total = tensor.size(0)
-    trunc = total - (total % length)
-    tensor = tensor[:trunc]
-    n = total // length
+def combine_fixed_length(tensor_list, length):
+    total_length = sum(t.size(0) for t in tensor_list)
+    if total_length % length != 0:
+        pad_length = length - (total_length % length)
+        tensor_list = list(tensor_list) # copy
+        tensor_list.append(torch.zeros(pad_length,*tensor_list[0].size()[1:], dtype=tensor_list[0].dtype))
+        total_length += pad_length
+    tensor = torch.cat(tensor_list, 0)
+    n = total_length // length
     return tensor.view(n, length, *tensor.size()[1:])
 
 def splice_audio(chunks, overlap):

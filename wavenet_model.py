@@ -3,6 +3,7 @@ import os
 import numpy as np
 import soundfile as sf
 import librosa
+import logging
 
 import torch
 import torch.nn as nn
@@ -98,13 +99,13 @@ def train():
         trainset = torch.utils.data.Subset(dataset, list(range(10,len(dataset))))
         num_features = dataset.num_speech_features
         batch_size = 4
-        print('output example:', dataset.filenames[0])
+        logging.info('output example: %s', dataset.filenames[0])
     else:
         trainset = EMGDataset(dev=False, test=False, limit_length=True)
         testset = EMGDataset(dev=True, limit_length=True)
         num_features = testset.num_speech_features
         batch_size = 1
-        print('output example:', testset.example_indices[0])
+        logging.info('output example: %s', testset.example_indices[0])
 
     if not os.path.exists(FLAGS.output_directory):
         os.makedirs(FLAGS.output_directory)
@@ -115,7 +116,7 @@ def train():
     if FLAGS.pretrained_wavenet_model is not None:
         wavenet_model.load_state_dict(torch.load(FLAGS.pretrained_wavenet_model))
 
-    optim = torch.optim.Adam(wavenet_model.parameters())
+    optim = torch.optim.Adam(wavenet_model.parameters(), weight_decay=1e-7)
     lr_sched = torch.optim.lr_scheduler.ReduceLROnPlateau(optim, 'min', 0.5, patience=2)
     dataloader = torchdata.DataLoader(trainset, batch_size=batch_size, shuffle=True, pin_memory=(device=='cuda'))
 
@@ -138,10 +139,10 @@ def train():
         train_err = np.mean(losses)
         dev_err = test(wavenet_model, testset, device)
         lr_sched.step(dev_err)
-        print(f'finished epoch {epoch_idx+1} with error {dev_err:.2f}')
-        print(f' train error {train_err:.2f}')
+        logging.info(f'finished epoch {epoch_idx+1} with error {dev_err:.2f}')
+        logging.info(f' train error {train_err:.2f}')
         if dev_err < best_dev_err:
-            print('saving model')
+            logging.info('saving model')
             torch.save(wavenet_model.state_dict(), os.path.join(FLAGS.output_directory, 'wavenet_model.pt'))
             best_dev_err = dev_err
 
@@ -150,6 +151,13 @@ def train():
         save_output(wavenet_model, datapoint['audio_features'], os.path.join(FLAGS.output_directory, f'wavenet_output_{i}.wav'), device)
 
 if __name__ == '__main__':
-    print(sys.argv)
     FLAGS(sys.argv)
+
+    os.makedirs(FLAGS.output_directory, exist_ok=True)
+    logging.basicConfig(handlers=[
+            logging.FileHandler(os.path.join(FLAGS.output_directory, 'log.txt'), 'w'),
+            logging.StreamHandler()
+            ], level=logging.INFO, format="%(message)s")
+    logging.info(sys.argv)
+
     train()

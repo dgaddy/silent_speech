@@ -9,22 +9,24 @@ import json
 import copy
 import sys
 import pickle
+import string
+import logging
 
 import librosa
 import soundfile as sf
+from textgrids import TextGrid
 
 import torch
 
-from data_utils import load_audio, get_emg_features, FeatureNormalizer, split_fixed_length
+from data_utils import load_audio, get_emg_features, FeatureNormalizer, combine_fixed_length, phoneme_inventory
 
 from absl import flags
 FLAGS = flags.FLAGS
 flags.DEFINE_list('remove_channels', [], 'channels to remove')
-flags.DEFINE_list('silent_data_directories', [], 'silent data locations')
-flags.DEFINE_list('audio_feature_directories', [], 'audio feature directories')
-flags.DEFINE_list('voiced_data_directories', [], 'voiced data locations')
-flags.DEFINE_string('testset_file', 'testset.json', 'file with testset indices')
-flags.DEFINE_string('normalizers_file', 'normalizers.pkl', 'file with pickled feature normalizers')
+flags.DEFINE_list('silent_data_directories', ['./emg_data/silent_parallel_data'], 'silent data locations')
+flags.DEFINE_list('voiced_data_directories', ['./emg_data/voiced_parallel_data','./emg_data/nonparallel_data'], 'voiced data locations')
+flags.DEFINE_string('testset_file', 'testset_largedev.json', 'file with testset indices')
+flags.DEFINE_string('text_align_directory', 'text_alignments', 'directory with alignment files')
 
 def remove_drift(signal, fs):
     b, a = scipy.signal.butter(3, 2, 'highpass', fs=fs)
@@ -45,7 +47,13 @@ def subsample(signal, new_freq, old_freq):
     result = np.interp(sample_times, times, signal)
     return result
 
-def load_utterance(base_dir, index, limit_length=False, debug=False):
+def apply_to_all(function, signal_array, *args, **kwargs):
+    results = []
+    for i in range(signal_array.shape[1]):
+        results.append(function(signal_array[:,i], *args, **kwargs))
+    return np.stack(results, 1)
+
+def load_utterance(base_dir, index, limit_length=False, debug=False, text_align_directory=None):
     index = int(index)
     raw_emg = np.load(os.path.join(base_dir, f'{index}_emg.npy'))
     before = os.path.join(base_dir, f'{index-1}_emg.npy')
@@ -59,31 +67,19 @@ def load_utterance(base_dir, index, limit_length=False, debug=False):
     else:
         raw_emg_after = np.zeros([0,raw_emg.shape[1]])
 
-    emg = []
-    remove_channels = [int(c) for c in FLAGS.remove_channels]
-    for emg_channel in range(raw_emg.shape[1]):
-        # add more context for filtering, then remove after filtering
-        x = np.concatenate([raw_emg_before[:,emg_channel],
-                            raw_emg[:,emg_channel],
-                            raw_emg_after[:,emg_channel]])
-        x = notch_harmonics(x, 60, 1000)
-        x = remove_drift(x, 1000)
-        x = x[raw_emg_before.shape[0]:x.shape[0]-raw_emg_after.shape[0]]
-        x = subsample(x, 600, 1000)
+    x = np.concatenate([raw_emg_before, raw_emg, raw_emg_after], 0)
+    x = apply_to_all(notch_harmonics, x, 60, 1000)
+    x = apply_to_all(remove_drift, x, 1000)
+    # XXX x -= np.median(x, 1, keepdims=True)
+    x = x[raw_emg_before.shape[0]:x.shape[0]-raw_emg_after.shape[0],:]
+    emg_orig = apply_to_all(subsample, x, 800, 1000)
+    x = apply_to_all(subsample, x, 600, 1000)
+    emg = x
 
-        if emg_channel in remove_channels:
-            x = np.zeros_like(x)
+    for c in FLAGS.remove_channels:
+        emg[:,int(c)] = 0
+        emg_orig[:,int(c)] = 0
 
-        emg.append(x)
-
-        if debug:
-            plt.plot(x)
-            plt.show()
-            s = abs(librosa.stft(np.ascontiguousarray(x)))
-            plt.imshow(s, origin='lower', aspect='auto', interpolation='nearest')
-            plt.show()
-
-    emg = np.stack(emg, 1)
     emg_features = get_emg_features(emg)
 
     mfccs, audio_discrete = load_audio(os.path.join(base_dir, f'{index}_audio_clean.flac'),
@@ -91,11 +87,39 @@ def load_utterance(base_dir, index, limit_length=False, debug=False):
 
     if emg_features.shape[0] > mfccs.shape[0]:
         emg_features = emg_features[:mfccs.shape[0],:]
+    emg = emg[6:6+6*emg_features.shape[0],:]
+    emg_orig = emg_orig[8:8+8*emg_features.shape[0],:]
+    assert emg.shape[0] == emg_features.shape[0]*6
 
     with open(os.path.join(base_dir, f'{index}_info.json')) as f:
         info = json.load(f)
 
-    return mfccs, audio_discrete, emg_features, info['text'], (info['book'],info['sentence_index'])
+    sess = os.path.basename(base_dir)
+    tg_fname = f'{text_align_directory}/{sess}/{sess}_{index}_audio.TextGrid'
+    if os.path.exists(tg_fname):
+        phonemes = read_phonemes(tg_fname, mfccs.shape[0], phoneme_inventory)
+    else:
+        phonemes = np.zeros(mfccs.shape[0], dtype=np.int64)+phoneme_inventory.index('sil')
+
+    return mfccs, audio_discrete, emg_features, info['text'], (info['book'],info['sentence_index']), phonemes, emg_orig.astype(np.float32)
+
+
+def read_phonemes(textgrid_fname, mfcc_len, phone_inventory):
+    tg = TextGrid(textgrid_fname)
+    phone_ids = np.zeros(int(tg['phones'][-1].xmax*100), dtype=np.int64)
+    phone_ids[:] = -1
+    for interval in tg['phones']:
+        phone = interval.text.lower()
+        if phone in ['', 'sp', 'spn']:
+            phone = 'sil'
+        if phone[-1] in string.digits:
+            phone = phone[:-1]
+        ph_id = phone_inventory.index(phone)
+        phone_ids[int(interval.xmin*100):int(interval.xmax*100)] = ph_id
+    assert (phone_ids >= 0).all(), 'missing aligned phones'
+
+    phone_ids = phone_ids[1:mfcc_len+1] # mfccs is 2-3 shorter due to edge effects
+    return phone_ids
 
 class EMGDirectory(object):
     def __init__(self, session_index, directory, silent, exclude_from_testset=False):
@@ -110,8 +134,38 @@ class EMGDirectory(object):
     def __repr__(self):
         return self.directory
 
+class SizeAwareSampler(torch.utils.data.Sampler):
+    def __init__(self, emg_dataset, max_len):
+        self.dataset = emg_dataset
+        self.max_len = max_len
+
+    def __iter__(self):
+        indices = list(range(len(self.dataset)))
+        random.shuffle(indices)
+        batch = []
+        batch_length = 0
+        for idx in indices:
+            directory_info, file_idx = self.dataset.example_indices[idx]
+            with open(os.path.join(directory_info.directory, f'{file_idx}_info.json')) as f:
+                info = json.load(f)
+            if not np.any([l in string.ascii_letters for l in info['text']]):
+                continue
+            length = sum([emg_len for emg_len, _, _ in info['chunks']])
+            if length > self.max_len:
+                logging.warning(f'Warning: example {idx} cannot fit within desired batch length')
+            if length + batch_length > self.max_len:
+                yield batch
+                batch = []
+                batch_length = 0
+            batch.append(idx)
+            batch_length += length
+        # dropping last incomplete batch
+
 class EMGDataset(torch.utils.data.Dataset):
     def __init__(self, base_dir=None, limit_length=False, dev=False, test=False, no_testset=False, no_normalizers=False):
+
+        self.text_align_directory = FLAGS.text_align_directory
+
         if no_testset:
             devset = []
             testset = []
@@ -163,7 +217,7 @@ class EMGDataset(torch.utils.data.Dataset):
         if not self.no_normalizers:
             self.mfcc_norm, self.emg_norm = pickle.load(open(FLAGS.normalizers_file,'rb'))
 
-        sample_mfccs, _, sample_emg, _, _ = load_utterance(self.example_indices[0][0].directory, self.example_indices[0][1])
+        sample_mfccs, _, sample_emg, _, _, _, _ = load_utterance(self.example_indices[0][0].directory, self.example_indices[0][1])
         self.num_speech_features = sample_mfccs.shape[1]
         self.num_features = sample_emg.shape[1]
         self.limit_length = limit_length
@@ -186,7 +240,8 @@ class EMGDataset(torch.utils.data.Dataset):
 
     def __getitem__(self, i):
         directory_info, idx = self.example_indices[i]
-        mfccs, audio, emg, text, book_location = load_utterance(directory_info.directory, idx, self.limit_length)
+        mfccs, audio, emg, text, book_location, phonemes, raw_emg = load_utterance(directory_info.directory, idx, self.limit_length, text_align_directory=self.text_align_directory)
+        raw_emg = raw_emg / 10
 
         if not self.no_normalizers:
             mfccs = self.mfcc_norm.normalize(mfccs)
@@ -195,11 +250,11 @@ class EMGDataset(torch.utils.data.Dataset):
 
         session_ids = np.full(emg.shape[0], directory_info.session_index, dtype=np.int64)
 
-        result = {'audio_features':mfccs, 'quantized_audio':audio, 'emg':emg, 'text':text, 'file_label':idx, 'session_ids':session_ids, 'book_location':book_location, 'silent':directory_info.silent}
+        result = {'audio_features':mfccs, 'quantized_audio':audio, 'emg':emg, 'text':text, 'file_label':idx, 'session_ids':session_ids, 'book_location':book_location, 'silent':directory_info.silent, 'raw_emg':raw_emg}
 
         if directory_info.silent:
             voiced_directory, voiced_idx = self.voiced_data_locations[book_location]
-            voiced_mfccs, _, voiced_emg, _, _ = load_utterance(voiced_directory.directory, voiced_idx, False)
+            voiced_mfccs, _, voiced_emg, _, _, phonemes, _ = load_utterance(voiced_directory.directory, voiced_idx, False, text_align_directory=self.text_align_directory)
 
             if not self.no_normalizers:
                 voiced_mfccs = self.mfcc_norm.normalize(voiced_mfccs)
@@ -213,21 +268,45 @@ class EMGDataset(torch.utils.data.Dataset):
                 alignment = self.alignments[book_location]
                 result['audio_features'] = voiced_mfccs[alignment]
 
+        result['phonemes'] = phonemes # either from this example if vocalized or aligned example if silent
+
         return result
 
     @staticmethod
     def collate_fixed_length(batch):
         batch_size = len(batch)
-        audio_features = torch.cat([torch.from_numpy(ex['audio_features']) for ex in batch], 0)
-        emg = torch.cat([torch.from_numpy(ex['emg']) for ex in batch], 0)
-        quantized_audio = torch.cat([torch.from_numpy(ex['quantized_audio']) for ex in batch], 0)
-        session_ids = torch.cat([torch.from_numpy(ex['session_ids']) for ex in batch], 0)
+        audio_features = []
+        audio_feature_lengths = []
+        parallel_emg = []
+        for ex in batch:
+            if ex['silent']:
+                audio_features.append(ex['parallel_voiced_audio_features'])
+                audio_feature_lengths.append(ex['parallel_voiced_audio_features'].shape[0])
+                parallel_emg.append(ex['parallel_voiced_emg'])
+            else:
+                audio_features.append(ex['audio_features'])
+                audio_feature_lengths.append(ex['audio_features'].shape[0])
+                parallel_emg.append(np.zeros(1))
+        audio_features = [torch.from_numpy(af) for af in audio_features]
+        parallel_emg = [torch.from_numpy(pe) for pe in parallel_emg]
+        phonemes = [torch.from_numpy(ex['phonemes']) for ex in batch]
+        emg = [torch.from_numpy(ex['emg']) for ex in batch]
+        raw_emg = [torch.from_numpy(ex['raw_emg']) for ex in batch]
+        session_ids = [torch.from_numpy(ex['session_ids']) for ex in batch]
+        lengths = [ex['emg'].shape[0] for ex in batch]
+        silent = [ex['silent'] for ex in batch]
 
-        mb = batch_size*8
-        return {'audio_features':split_fixed_length(audio_features, 100)[:mb],
-                'emg':split_fixed_length(emg, 100)[:mb],
-                'quantized_audio':split_fixed_length(quantized_audio, 16000)[:mb],
-                'session_ids':split_fixed_length(session_ids, 100)[:mb]}
+        seq_len = 200
+        result = {'audio_features':combine_fixed_length(audio_features, seq_len),
+                  'audio_feature_lengths':audio_feature_lengths,
+                  'emg':combine_fixed_length(emg, seq_len),
+                  'raw_emg':combine_fixed_length(raw_emg, seq_len*8),
+                  'parallel_voiced_emg':parallel_emg,
+                  'phonemes':phonemes,
+                  'session_ids':combine_fixed_length(session_ids, seq_len),
+                  'lengths':lengths,
+                  'silent':silent}
+        return result
 
 def make_normalizers():
     dataset = EMGDataset(no_normalizers=True)
@@ -245,7 +324,6 @@ def make_normalizers():
 if __name__ == '__main__':
     FLAGS(sys.argv)
     d = EMGDataset()
-    emg_features = d[0]['emg']
-    plt.plot(emg_features[:,:8])
-    plt.show()
+    for i in range(1000):
+        d[i]
 

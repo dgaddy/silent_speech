@@ -1,4 +1,5 @@
 import os
+import logging
 
 import deepspeech
 import jiwer
@@ -22,6 +23,6 @@ def evaluate(testset, audio_directory):
     transformation = jiwer.Compose([jiwer.RemovePunctuation(), jiwer.ToLowerCase()])
     targets = transformation(targets)
     predictions = transformation(predictions)
-    print('targets:', targets)
-    print('predictions:', predictions)
-    print('wer:', jiwer.wer(targets, predictions))
+    logging.info(f'targets: {targets}')
+    logging.info(f'predictions: {predictions}')
+    logging.info(f'wer: {jiwer.wer(targets, predictions)}')
