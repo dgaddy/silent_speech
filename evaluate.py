@@ -8,7 +8,7 @@ from torch import nn
 from transduction_model import test, save_output, Model
 from read_emg import EMGDataset
 from asr import evaluate
-from data_utils import phoneme_inventory
+from data_utils import phoneme_inventory, print_confusion
 
 from absl import flags
 FLAGS = flags.FLAGS
@@ -21,12 +21,19 @@ class EnsembleModel(nn.Module):
 
     def forward(self, x, x_raw, sess):
         ys = []
+        ps = []
         for model in self.models:
-            ys.append(model(x, x_raw, sess)[0])
-        return torch.mean(torch.stack(ys,0),dim=0), None
+            y, p = model(x, x_raw, sess)
+            ys.append(y)
+            ps.append(p)
+        return torch.stack(ys,0).mean(0), torch.stack(ps,0).mean(0)
 
 def main():
-    logging.basicConfig(level=logging.INFO, format='%(message)s')
+    os.makedirs(FLAGS.output_directory, exist_ok=True)
+    logging.basicConfig(handlers=[
+            logging.FileHandler(os.path.join(FLAGS.output_directory, 'eval_log.txt'), 'w'),
+            logging.StreamHandler()
+            ], level=logging.INFO, format="%(message)s")
 
     testset = EMGDataset(test=True)
 
@@ -41,7 +48,9 @@ def main():
         models.append(model)
     ensemble = EnsembleModel(models)
 
-    os.makedirs(FLAGS.output_directory, exist_ok=True)
+    _, _, confusion = test(ensemble, testset, device)
+    print_confusion(confusion)
+
     for i, datapoint in enumerate(testset):
         save_output(ensemble, datapoint, os.path.join(FLAGS.output_directory, f'example_output_{i}.wav'), device)
 

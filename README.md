@@ -1,11 +1,8 @@
 # Digital Voicing of Silent Speech
 
-## Update December 2020
-
-This repository now uses an improved model which will be announced in an upcoming paper.  The new model uses a convolution and transformer-based architecture with raw EMG signals as inputs, with soft dynamic time warping for training and an auxiliary phoneme-prediction loss.
-On the ASR-based open vocabulary evaluation, it achieves a WER around 45% (compared to 68% for the original model).
-If you plan to publish work that uses this updated model, please email me at dgaddy@berkeley.edu to discuss appropriate citation.
-To use the original model, checkout commit 200e683.
+This is the repository for the papers "Digital Voicing of Silent Speech" at EMNLP 2020 and "An Improved Model for Voicing Silent Speech" at ACL 2021.
+The current commit contains only the model for the more recent paper, but the 2020 model can be found in the commit history.
+On an ASR-based open vocabulary evaluation, the latest model achieves a WER of approximately 42%.
 
 ## Data
 
@@ -34,11 +31,9 @@ git clone https://github.com/NVIDIA/nv-wavenet.git nv_wavenet
 ```
 If you have an older GPU, you may need to use <https://github.com/dgaddy/nv-wavenet> instead, which removes code for 16-bit floating point that only works on newer GPUs.
 
-In another directory, follow the install instructions at <https://github.com/mblondel/soft-dtw>.
-
 The rest of the required packages can be installed with pip.
 ```
-pip install absl-py librosa soundfile matplotlib scipy scikit-learn numba jiwer unidecode deepspeech==0.8.2 praat-textgrids
+pip install absl-py librosa soundfile matplotlib scipy numba jiwer unidecode deepspeech==0.8.2 praat-textgrids
 ```
 
 Download pre-trained DeepSpeech model files.  It is important that you use DeepSpeech version 0.7.0 model files to maintain consistency of evaluation.  Note that the DeepSpeech pip package we recommend is version 0.8.2 (which uses a more up-to-date CUDA), but this is compatible with version 0.7.x model files.
@@ -65,4 +60,4 @@ Finally, to evaluate a model on the test set, use
 python evaluate.py --models ./models/transduction_model/model.pt --pretrained_wavenet_model ./models/wavenet_model/wavenet_model.pt --output_directory evaluation_output
 ```
 
-By default, the scripts now use a larger validation set than was used in the original EMNLP 2020 paper, since the small size of the original set gave WER evaluations a high variance.  You may want to switch back to the original validation set for your final run that will be used to get test numbers by using `--testset_file testset_origdev.json`.
+By default, the scripts now use a larger validation set than was used in the original EMNLP 2020 paper, since the small size of the original set gave WER evaluations a high variance.  If you want to use the original validation set you can add the flag `--testset_file testset_origdev.json`.

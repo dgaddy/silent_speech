@@ -70,7 +70,6 @@ def load_utterance(base_dir, index, limit_length=False, debug=False, text_align_
     x = np.concatenate([raw_emg_before, raw_emg, raw_emg_after], 0)
     x = apply_to_all(notch_harmonics, x, 60, 1000)
     x = apply_to_all(remove_drift, x, 1000)
-    # XXX x -= np.median(x, 1, keepdims=True)
     x = x[raw_emg_before.shape[0]:x.shape[0]-raw_emg_after.shape[0],:]
     emg_orig = apply_to_all(subsample, x, 800, 1000)
     x = apply_to_all(subsample, x, 600, 1000)
@@ -223,17 +222,12 @@ class EMGDataset(torch.utils.data.Dataset):
         self.limit_length = limit_length
         self.num_sessions = len(directories)
 
-        self.alignments = None
-
     def silent_subset(self):
         silent_indices = []
         for i, (d, _) in enumerate(self.example_indices):
             if d.silent:
                 silent_indices.append(i)
         return torch.utils.data.Subset(self, silent_indices)
-
-    def set_silent_alignments(self, examples, alignments):
-        self.alignments = {ex['book_location']:al for ex, al in zip(examples, alignments)}
 
     def __len__(self):
         return len(self.example_indices)
@@ -263,10 +257,6 @@ class EMGDataset(torch.utils.data.Dataset):
 
             result['parallel_voiced_audio_features'] = voiced_mfccs
             result['parallel_voiced_emg'] = voiced_emg
-
-            if self.alignments is not None:
-                alignment = self.alignments[book_location]
-                result['audio_features'] = voiced_mfccs[alignment]
 
         result['phonemes'] = phonemes # either from this example if vocalized or aligned example if silent
 

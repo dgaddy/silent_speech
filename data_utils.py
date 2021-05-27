@@ -45,25 +45,6 @@ def load_audio(filename, start=None, end=None, max_frames=None, renormalize_volu
     audio_discrete = audio_discrete[:audio_length] # cut off audio to match framed length
     return mfccs.astype(np.float32), audio_discrete
 
-def pysptk_features(x):
-    import pysptk
-
-    wav_max = 2**15-1
-    x = (x * wav_max).astype(np.float64)
-
-    frame_length = 512
-    hop_length = 160
-    frames = librosa.util.frame(x, frame_length=frame_length, hop_length=hop_length).T
-    frames *= pysptk.blackman(frame_length)
-    order = 25 # seems to be pretty standard, results in 26 values
-    alpha = 0.42 # this value is best for 16kHz sampling according to docs http://ftp.jaist.ac.jp/pub/pkgsrc/distfiles/SPTKref-3.9.pdf
-    mcep = pysptk.mcep(frames, order, alpha)
-
-    f0 = pysptk.swipe(x, fs=16000, hopsize=hop_length, min=60, max=240, otype="f0")
-    f0 = f0[1:1+mcep.shape[0]] # cut off ends to match mcep lengths
-
-    return np.concatenate([f0[:,np.newaxis], mcep], 1).astype(np.float32)
-
 def double_average(x):
     assert len(x.shape) == 1
     f = np.ones(9)/9.0
@@ -148,6 +129,17 @@ def combine_fixed_length(tensor_list, length):
     n = total_length // length
     return tensor.view(n, length, *tensor.size()[1:])
 
+def decollate_tensor(tensor, lengths):
+    b, s, d = tensor.size()
+    tensor = tensor.view(b*s, d)
+    results = []
+    idx = 0
+    for length in lengths:
+        assert idx + length <= b * s
+        results.append(tensor[idx:idx+length])
+        idx += length
+    return results
+
 def splice_audio(chunks, overlap):
     chunks = [c.copy() for c in chunks] # copy so we can modify in place
 
@@ -171,3 +163,22 @@ def splice_audio(chunks, overlap):
         i += l-overlap
 
     return result
+
+def print_confusion(confusion_mat, n=10):
+    # axes are (pred, target)
+    target_counts = confusion_mat.sum(0) + 1e-4
+    aslist = []
+    for p1 in range(len(phoneme_inventory)):
+        for p2 in range(p1):
+            if p1 != p2:
+                aslist.append(((confusion_mat[p1,p2]+confusion_mat[p2,p1])/(target_counts[p1]+target_counts[p2]), p1, p2))
+    aslist.sort()
+    aslist = aslist[-n:]
+    max_val = aslist[-1][0]
+    min_val = aslist[0][0]
+    val_range = max_val - min_val
+    print('Common confusions (confusion, accuracy)')
+    for v, p1, p2 in aslist:
+        p1s = phoneme_inventory[p1]
+        p2s = phoneme_inventory[p2]
+        print(f'{p1s} {p2s} {v*100:.1f} {(confusion_mat[p1,p1]+confusion_mat[p2,p2])/(target_counts[p1]+target_counts[p2])*100:.1f}')

@@ -10,21 +10,19 @@ import torch.nn.functional as F
 
 from read_emg import EMGDataset, SizeAwareSampler
 from wavenet_model import WavenetModel, save_output as save_wavenet_output
-from align import soft_dtw, align_from_distances, get_cca_transform, soft_dtw_visitations_numpy
+from align import align_from_distances
 from asr import evaluate
 from transformer import TransformerEncoderLayer
-from data_utils import phoneme_inventory
+from data_utils import phoneme_inventory, decollate_tensor
 
 from absl import flags
 FLAGS = flags.FLAGS
 flags.DEFINE_integer('model_size', 768, 'number of hidden dimensions')
 flags.DEFINE_integer('num_layers', 6, 'number of layers')
-flags.DEFINE_float('dropout', 0.5, 'dropout')
 flags.DEFINE_integer('batch_size', 32, 'training batch size')
 flags.DEFINE_float('learning_rate', 1e-3, 'learning rate')
 flags.DEFINE_integer('learning_rate_patience', 5, 'learning rate decay patience')
 flags.DEFINE_integer('learning_rate_warmup', 500, 'steps of linear warmup')
-flags.DEFINE_float('alignment_emg_weight', 0.0, 'weight of emg feature distance for alignments')
 flags.DEFINE_string('start_training_from', None, 'start training from this model')
 flags.DEFINE_float('data_size_fraction', 1.0, 'fraction of training data to use')
 flags.DEFINE_boolean('no_session_embed', False, "don't use a session embedding")
@@ -99,12 +97,13 @@ class Model(nn.Module):
         x = x.transpose(0,1)
         return self.w_out(x), self.w_aux(x)
 
-def test(model, testset, device, cca):
+def test(model, testset, device):
     model.eval()
 
     dataloader = torch.utils.data.DataLoader(testset, batch_size=32, collate_fn=testset.collate_fixed_length)
     losses = []
     accuracies = []
+    phoneme_confusion = np.zeros((len(phoneme_inventory),len(phoneme_inventory)))
     with torch.no_grad():
         for example in dataloader:
             X = example['emg'].to(device)
@@ -113,13 +112,13 @@ def test(model, testset, device, cca):
 
             pred, phoneme_pred = model(X, X_raw, sess)
 
-            loss, phon_acc = dtw_loss(pred, phoneme_pred, example, cca, True)
+            loss, phon_acc = dtw_loss(pred, phoneme_pred, example, True, phoneme_confusion)
             losses.append(loss.item())
 
             accuracies.append(phon_acc)
 
     model.train()
-    return np.mean(losses), np.mean(accuracies) #TODO size-weight average
+    return np.mean(losses), np.mean(accuracies), phoneme_confusion #TODO size-weight average
 
 def save_output(model, datapoint, filename, device, gold_mfcc=False):
     model.eval()
@@ -142,18 +141,7 @@ def save_output(model, datapoint, filename, device, gold_mfcc=False):
     save_wavenet_output(wavenet_model, y, filename, device)
     model.train()
 
-def decollate_tensor(tensor, lengths):
-    b, s, d = tensor.size()
-    tensor = tensor.view(b*s, d)
-    results = []
-    idx = 0
-    for length in lengths:
-        assert idx + length <= b * s
-        results.append(tensor[idx:idx+length])
-        idx += length
-    return results
-
-def dtw_loss(predictions, phoneme_predictions, example, cca, phoneme_eval=False):
+def dtw_loss(predictions, phoneme_predictions, example, phoneme_eval=False, phoneme_confusion=None):
     device = predictions.device
     predictions = decollate_tensor(predictions, example['lengths'])
     phoneme_predictions = decollate_tensor(phoneme_predictions, example['lengths'])
@@ -164,20 +152,16 @@ def dtw_loss(predictions, phoneme_predictions, example, cca, phoneme_eval=False)
 
     audio_features = decollate_tensor(audio_features, example['audio_feature_lengths'])
 
-    emg = decollate_tensor(example['emg'], example['lengths'])
-
     losses = []
     correct_phones = 0
     total_length = 0
-    for pred, y, pred_phone, y_phone, silent, e, pe in zip(predictions, audio_features, phoneme_predictions, phoneme_targets, example['silent'], emg, example['parallel_voiced_emg']):
+    for pred, y, pred_phone, y_phone, silent in zip(predictions, audio_features, phoneme_predictions, phoneme_targets, example['silent']):
         assert len(pred.size()) == 2 and len(y.size()) == 2
         y_phone = y_phone.to(device)
 
         if silent:
             dists = torch.cdist(pred.unsqueeze(0), y.unsqueeze(0))
-            e, pe = cca(e, pe)
-            emg_dists = torch.cdist(e.unsqueeze(0).to(device), pe.unsqueeze(0).to(device))
-            costs = dists.squeeze(0) + FLAGS.alignment_emg_weight * emg_dists.squeeze(0)
+            costs = dists.squeeze(0)
 
             # pred_phone (seq1_len, 48), y_phone (seq2_len)
             # phone_probs (seq1_len, seq2_len)
@@ -186,16 +170,18 @@ def dtw_loss(predictions, phoneme_predictions, example, cca, phoneme_eval=False)
 
             costs = costs + FLAGS.phoneme_loss_weight * -phone_lprobs
 
-            visitations = soft_dtw_visitations_numpy(costs.cpu().detach().numpy(), .1)
-            visitations = torch.from_numpy(visitations).to(device)
+            alignment = align_from_distances(costs.T.cpu().detach().numpy())
 
-            loss = (visitations * costs).sum()
+            loss = costs[alignment,range(len(alignment))].sum()
 
             if phoneme_eval:
-                alignment = align_from_distances(costs.cpu().detach().numpy())
+                alignment = align_from_distances(costs.T.cpu().detach().numpy())
 
                 pred_phone = pred_phone.argmax(-1)
-                correct_phones += (pred_phone == y_phone[alignment]).sum().item()
+                correct_phones += (pred_phone[alignment] == y_phone).sum().item()
+
+                for p, t in zip(pred_phone[alignment].tolist(), y_phone.tolist()):
+                    phoneme_confusion[p, t] += 1
         else:
             assert y.size(0) == pred.size(0)
 
@@ -209,8 +195,11 @@ def dtw_loss(predictions, phoneme_predictions, example, cca, phoneme_eval=False)
                 pred_phone = pred_phone.argmax(-1)
                 correct_phones += (pred_phone == y_phone).sum().item()
 
+                for p, t in zip(pred_phone.tolist(), y_phone.tolist()):
+                    phoneme_confusion[p, t] += 1
+
         losses.append(loss)
-        total_length += pred.size(0)
+        total_length += y.size(0)
 
     return sum(losses)/total_length, correct_phones/total_length
 
@@ -229,7 +218,7 @@ def train_model(trainset, devset, device, save_sound_outputs=True, n_epochs=80):
         del state_dict['session_emb.weight']
         model.load_state_dict(state_dict, strict=False)
 
-    optim = torch.optim.Adam(model.parameters(), weight_decay=FLAGS.l2)
+    optim = torch.optim.AdamW(model.parameters(), weight_decay=FLAGS.l2)
     lr_sched = torch.optim.lr_scheduler.ReduceLROnPlateau(optim, 'min', 0.5, patience=FLAGS.learning_rate_patience)
 
     def set_lr(new_lr):
@@ -241,10 +230,6 @@ def train_model(trainset, devset, device, save_sound_outputs=True, n_epochs=80):
         iteration = iteration + 1
         if iteration <= FLAGS.learning_rate_warmup:
             set_lr(iteration*target_lr/FLAGS.learning_rate_warmup)
-
-    def get_emg_alignment_features(example):
-        return example['emg'], example['parallel_voiced_emg']
-    cca = get_cca_transform(trainset.silent_subset(), get_emg_alignment_features)
 
     batch_idx = 0
     for epoch_idx in range(n_epochs):
@@ -259,7 +244,7 @@ def train_model(trainset, devset, device, save_sound_outputs=True, n_epochs=80):
 
             pred, phoneme_pred = model(X, X_raw, sess)
 
-            loss, _ = dtw_loss(pred, phoneme_pred, example, cca)
+            loss, _ = dtw_loss(pred, phoneme_pred, example)
             losses.append(loss.item())
 
             loss.backward()
@@ -267,7 +252,7 @@ def train_model(trainset, devset, device, save_sound_outputs=True, n_epochs=80):
 
             batch_idx += 1
         train_loss = np.mean(losses)
-        val, phoneme_acc = test(model, devset, device, cca)
+        val, phoneme_acc, _ = test(model, devset, device)
         lr_sched.step(val)
         logging.info(f'finished epoch {epoch_idx+1} - validation loss: {val:.4f} training loss: {train_loss:.4f} phoneme accuracy: {phoneme_acc*100:.2f}')
         torch.save(model.state_dict(), os.path.join(FLAGS.output_directory,'model.pt'))
