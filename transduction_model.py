@@ -342,7 +342,7 @@ def main():
     run["learning_rate"] = FLAGS.learning_rate
     run["data_size_fraction"] = FLAGS.data_size_fraction
     if device == "cuda":
-        run["torch_device_name"] = torch.cuda_device_name(0)
+        run["torch_device_name"] = torch.cuda.get_device_name(0)
     else:
         run["torch_device_name"] = "cpu"
     run["vcpu_count"] = multiprocessing.cpu_count()
