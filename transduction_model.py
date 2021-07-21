@@ -9,7 +9,7 @@ from torch import nn
 import torch.nn.functional as F
 
 from read_emg import EMGDataset, SizeAwareSampler
-from wavenet_model import WavenetModel, save_output as save_wavenet_output
+#from wavenet_model import WavenetModel, save_output as save_wavenet_output
 from align import align_from_distances
 from asr import evaluate
 from transformer import TransformerEncoderLayer
@@ -28,6 +28,14 @@ flags.DEFINE_float('data_size_fraction', 1.0, 'fraction of training data to use'
 flags.DEFINE_boolean('no_session_embed', False, "don't use a session embedding")
 flags.DEFINE_float('phoneme_loss_weight', 0.1, 'weight of auxiliary phoneme prediction loss')
 flags.DEFINE_float('l2', 1e-7, 'weight decay')
+
+# tpu imports
+#import torch_xla
+#import torch_xla.core.xla_model as xm
+flags.DEFINE_boolean('debug', False, 'debug')
+flags.DEFINE_string('output_directory', 'output', 'where to save models and outputs')
+flags.DEFINE_string('pretrained_wavenet_model', None, 'filename of model to start training with')
+import time
 
 class ResBlock(nn.Module):
     def __init__(self, num_ins, num_outs, stride=1):
@@ -100,7 +108,7 @@ class Model(nn.Module):
 def test(model, testset, device):
     model.eval()
 
-    dataloader = torch.utils.data.DataLoader(testset, batch_size=32, collate_fn=testset.collate_fixed_length)
+    dataloader = torch.utils.data.DataLoader(testset, batch_size=FLAGS.batch_size, collate_fn=testset.collate_fixed_length)
     losses = []
     accuracies = []
     phoneme_confusion = np.zeros((len(phoneme_inventory),len(phoneme_inventory)))
@@ -156,23 +164,37 @@ def dtw_loss(predictions, phoneme_predictions, example, phoneme_eval=False, phon
     correct_phones = 0
     total_length = 0
     for pred, y, pred_phone, y_phone, silent in zip(predictions, audio_features, phoneme_predictions, phoneme_targets, example['silent']):
+        print("LOSS")
         assert len(pred.size()) == 2 and len(y.size()) == 2
         y_phone = y_phone.to(device)
 
         if silent:
-            dists = torch.cdist(pred.unsqueeze(0), y.unsqueeze(0))
+            start_time = time.time()
+            print(f"LOSS (silent)")
+            #dists = torch.cdist(pred.unsqueeze(0), y.unsqueeze(0))
+            dists = torch.cdist(pred.unsqueeze(0).cpu(), y.unsqueeze(0).cpu())
             costs = dists.squeeze(0)
+
+            print(f"LOSS (silent): tm {time.time() - start_time}")
 
             # pred_phone (seq1_len, 48), y_phone (seq2_len)
             # phone_probs (seq1_len, seq2_len)
             pred_phone = F.log_softmax(pred_phone, -1)
             phone_lprobs = pred_phone[:,y_phone]
 
+            print(f"LOSS (silent): tm {time.time() - start_time}")
+
             costs = costs + FLAGS.phoneme_loss_weight * -phone_lprobs
+            
+            print(f"LOSS (silent): tm {time.time() - start_time}")
 
             alignment = align_from_distances(costs.T.cpu().detach().numpy())
 
+            print(f"LOSS (silent): tm {time.time() - start_time}")
+
             loss = costs[alignment,range(len(alignment))].sum()
+
+            print(f"LOSS (silent): tm {time.time() - start_time}")
 
             if phoneme_eval:
                 alignment = align_from_distances(costs.T.cpu().detach().numpy())
@@ -183,13 +205,18 @@ def dtw_loss(predictions, phoneme_predictions, example, phoneme_eval=False, phon
                 for p, t in zip(pred_phone[alignment].tolist(), y_phone.tolist()):
                     phoneme_confusion[p, t] += 1
         else:
+            start_time = time.time()
+            print(f"LOSS (voiced)")
             assert y.size(0) == pred.size(0)
 
             dists = F.pairwise_distance(y, pred)
+            print(f"LOSS (voiced): tm {time.time() - start_time}")
 
             assert len(pred_phone.size()) == 2 and len(y_phone.size()) == 1
             phoneme_loss = F.cross_entropy(pred_phone, y_phone, reduction='sum')
-            loss = dists.cpu().sum() + FLAGS.phoneme_loss_weight * phoneme_loss.cpu()
+            # loss = dists.cpu().sum() + FLAGS.phoneme_loss_weight * phoneme_loss.cpu()
+            loss = dists.sum() + FLAGS.phoneme_loss_weight * phoneme_loss
+            print(f"LOSS (voiced): tm {time.time() - start_time}")
 
             if phoneme_eval:
                 pred_phone = pred_phone.argmax(-1)
@@ -197,6 +224,7 @@ def dtw_loss(predictions, phoneme_predictions, example, phoneme_eval=False, phon
 
                 for p, t in zip(pred_phone.tolist(), y_phone.tolist()):
                     phoneme_confusion[p, t] += 1
+            print(f"LOSS (voiced): tm {time.time() - start_time}")
 
         losses.append(loss)
         total_length += y.size(0)
@@ -208,7 +236,10 @@ def train_model(trainset, devset, device, save_sound_outputs=True, n_epochs=80):
         training_subset = trainset
     else:
         training_subset = torch.utils.data.Subset(trainset, list(range(int(len(trainset)*FLAGS.data_size_fraction))))
-    dataloader = torch.utils.data.DataLoader(training_subset, pin_memory=(device=='cuda'), collate_fn=devset.collate_fixed_length, num_workers=8, batch_sampler=SizeAwareSampler(trainset, 256000))
+
+    MAX_DATA = int((256000 / 32) * FLAGS.batch_size)
+    # dataloader = torch.utils.data.DataLoader(training_subset, pin_memory=(device=='cuda'), collate_fn=devset.collate_fixed_length, num_workers=8, batch_sampler=SizeAwareSampler(trainset, MAX_DATA))
+    dataloader = torch.utils.data.DataLoader(training_subset, pin_memory=True, collate_fn=devset.collate_fixed_length, num_workers=8, batch_sampler=SizeAwareSampler(trainset, MAX_DATA))
 
     n_phones = len(phoneme_inventory)
     model = Model(devset.num_features, devset.num_speech_features, n_phones, devset.num_sessions).to(device)
@@ -233,22 +264,37 @@ def train_model(trainset, devset, device, save_sound_outputs=True, n_epochs=80):
 
     batch_idx = 0
     for epoch_idx in range(n_epochs):
+        print(f"[TRAIN] EPOCH: {epoch_idx}, BATCH: {batch_idx}")
         losses = []
         for example in dataloader:
+            start_time = time.time()
+
             optim.zero_grad()
             schedule_lr(batch_idx)
 
+            dev_time = time.time()
             X = example['emg'].to(device)
             X_raw = example['raw_emg'].to(device)
             sess = example['session_ids'].to(device)
+            print(f"[TRAIN_TO_DEV] EPOCH: {epoch_idx}, BATCH: {batch_idx}, {time.time() - dev_time}")
 
             pred, phoneme_pred = model(X, X_raw, sess)
-
+            print(f"[TRAIN] EPOCH: {epoch_idx}, BATCH: {batch_idx}, infer_tm: {time.time() - start_time}")
             loss, _ = dtw_loss(pred, phoneme_pred, example)
+            print(f"[TRAIN] EPOCH: {epoch_idx}, BATCH: {batch_idx}, loss_tm: {time.time() - start_time}")
             losses.append(loss.item())
 
-            loss.backward()
+            print(f"[TRAIN] EPOCH: {epoch_idx}, BATCH: {batch_idx}, appended_loseses")
+
+            # loss.backward()
+            loss.backward(torch.ones_like(loss))
+
+            print(f"[TRAIN] EPOCH: {epoch_idx}, BATCH: {batch_idx}, calculating backprops")
+
             optim.step()
+            print(f"[TRAIN] EPOCH: {epoch_idx}, BATCH: {batch_idx}, applying backprops")
+
+            print(f"[TRAIN] EPOCH: {epoch_idx}, BATCH: {batch_idx}, backprop: {time.time() - start_time}")
 
             batch_idx += 1
         train_loss = np.mean(losses)
@@ -286,6 +332,8 @@ def main():
     logging.info('output example: %s', devset.example_indices[0])
     logging.info('train / dev split: %d %d',len(trainset),len(devset))
 
+    # tpu device
+    #device = xm.xla_device()
     device = 'cuda' if torch.cuda.is_available() and not FLAGS.debug else 'cpu'
 
     model = train_model(trainset, devset, device, save_sound_outputs=(FLAGS.pretrained_wavenet_model is not None))
