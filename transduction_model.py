@@ -180,7 +180,7 @@ def dtw_loss(predictions, phoneme_predictions, example, phoneme_eval=False, phon
             start_time = time.time()
             print(f"LOSS (silent)")
             #dists = torch.cdist(pred.unsqueeze(0), y.unsqueeze(0))
-            dists = torch.cdist(pred.unsqueeze(0).cpu(), y.unsqueeze(0).cpu())
+            dists = torch.cdist(pred.unsqueeze(0), y.unsqueeze(0))
             costs = dists.squeeze(0)
 
             print(f"LOSS (silent): tm {time.time() - start_time}")
