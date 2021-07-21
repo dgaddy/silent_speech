@@ -45,6 +45,9 @@ flags.DEFINE_string('neptune_api_token', '', 'Name of neptune.ai logging token (
 import neptune.new as neptune
 run = None
 
+# use this to get vcpu count
+import multiprocessing
+
 class ResBlock(nn.Module):
     def __init__(self, num_ins, num_outs, stride=1):
         super().__init__()
@@ -334,6 +337,11 @@ def main():
     run["num_layers"]    = FLAGS.num_layers
     run["learning_rate"] = FLAGS.learning_rate
     run["data_size_fraction"] = FLAGS.data_size_fraction
+    if device == "cuda":
+        run["torch_device_name"] = torch.cuda_device_name(0)
+    else:
+        run["torch_device_name"] = "cpu"
+    run["vcpu_count"] = multiprocessing.cpu_count()
 
     os.makedirs(FLAGS.output_directory, exist_ok=True)
     logging.basicConfig(handlers=[
