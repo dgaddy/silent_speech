@@ -330,6 +330,10 @@ def main():
     run = neptune.init(project=FLAGS.neptune_project,
                    api_token=FLAGS.neptune_api_token)
 
+    # Get Device (CUDA, CPU, TPU)
+    #device = xm.xla_device()
+    device = 'cuda' if torch.cuda.is_available() and not FLAGS.debug else 'cpu'
+
     # experiment global features
     run["experiment_name"] = "Initial gcp_testrun experiment"
     run["batch_size"]    = FLAGS.batch_size
@@ -358,10 +362,6 @@ def main():
     devset = EMGDataset(dev=True)
     logging.info('output example: %s', devset.example_indices[0])
     logging.info('train / dev split: %d %d',len(trainset),len(devset))
-
-    # tpu device
-    #device = xm.xla_device()
-    device = 'cuda' if torch.cuda.is_available() and not FLAGS.debug else 'cpu'
 
     model = train_model(trainset, devset, device, save_sound_outputs=(FLAGS.pretrained_wavenet_model is not None))
 
