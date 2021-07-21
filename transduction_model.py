@@ -327,7 +327,13 @@ def main():
     run = neptune.init(project=FLAGS.neptune_project,
                    api_token=FLAGS.neptune_api_token)
 
+    # experiment global features
     run["experiment_name"] = "Initial gcp_testrun experiment"
+    run["batch_size"]    = FLAGS.batch_size
+    run["model_size"]    = FLAGS.model_size
+    run["num_layers"]    = FLAGS.num_layers
+    run["learning_rate"] = FLAGS.learning_rate
+    run["data_size_fraction"] = FLAGS.data_size_fraction
 
     os.makedirs(FLAGS.output_directory, exist_ok=True)
     logging.basicConfig(handlers=[
