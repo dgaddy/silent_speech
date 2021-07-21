@@ -324,7 +324,7 @@ def train_model(trainset, devset, device, save_sound_outputs=True, n_epochs=80):
     return model
 
 def main():
-    neptune.init(project=FLAGS.neptune_project,
+    run = neptune.init(project=FLAGS.neptune_project,
                    api_token=FLAGS.neptune_api_token)
 
     run["experiment_name"] = "Initial gcp_testrun experiment"
