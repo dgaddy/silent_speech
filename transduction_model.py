@@ -43,10 +43,7 @@ flags.DEFINE_string('neptune_api_token', '', 'Name of neptune.ai logging token (
 
 # set neptune
 import neptune.new as neptune
-run = neptune.init(project=FLAGS.neptune_project,
-                   api_token=FLAGS.neptune_api_token)
-
-run["experiment_name"] = "Initial gcp_testrun experiment"
+run = None
 
 class ResBlock(nn.Module):
     def __init__(self, num_ins, num_outs, stride=1):
@@ -327,6 +324,11 @@ def train_model(trainset, devset, device, save_sound_outputs=True, n_epochs=80):
     return model
 
 def main():
+    neptune.init(project=FLAGS.neptune_project,
+                   api_token=FLAGS.neptune_api_token)
+
+    run["experiment_name"] = "Initial gcp_testrun experiment"
+
     os.makedirs(FLAGS.output_directory, exist_ok=True)
     logging.basicConfig(handlers=[
             logging.FileHandler(os.path.join(FLAGS.output_directory, 'log.txt'), 'w'),
