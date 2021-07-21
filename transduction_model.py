@@ -37,6 +37,17 @@ flags.DEFINE_string('output_directory', 'output', 'where to save models and outp
 flags.DEFINE_string('pretrained_wavenet_model', None, 'filename of model to start training with')
 import time
 
+# neptune logging imports
+flags.DEFINE_string('neptune_project', '', 'Name of neptune.ai logging project (if applicable)')
+flags.DEFINE_string('neptune_api_token', '', 'Name of neptune.ai logging token (if applicable)')
+
+# set neptune
+import neptune.new as neptune
+run = neptune.init(project=FLAGS.neptune_project,
+                   api_token=FLAGS.neptune_api_token)
+
+run["experiment_name"] = "Initial gcp_testrun experiment"
+
 class ResBlock(nn.Module):
     def __init__(self, num_ins, num_outs, stride=1):
         super().__init__()
