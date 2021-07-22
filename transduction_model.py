@@ -244,15 +244,18 @@ def dtw_loss(predictions, phoneme_predictions, example, phoneme_eval=False, phon
     return sum(losses)/total_length, correct_phones/total_length
 
 def train_model(trainset, devset, device, save_sound_outputs=True, n_epochs=80):
+    print("calc dataset size")
     if FLAGS.data_size_fraction >= 1:
         training_subset = trainset
     else:
         training_subset = torch.utils.data.Subset(trainset, list(range(int(len(trainset)*FLAGS.data_size_fraction))))
 
+    print("loading data using pytorch dataloader")
     MAX_DATA = int((256000 / 32) * FLAGS.batch_size)
     # dataloader = torch.utils.data.DataLoader(training_subset, pin_memory=(device=='cuda'), collate_fn=devset.collate_fixed_length, num_workers=8, batch_sampler=SizeAwareSampler(trainset, MAX_DATA))
-    dataloader = torch.utils.data.DataLoader(training_subset, pin_memory=True, collate_fn=devset.collate_fixed_length, num_workers=8, batch_sampler=SizeAwareSampler(trainset, MAX_DATA))
+    dataloader = torch.utils.data.DataLoader(training_subset, pin_memory=True, collate_fn=devset.collate_fixed_length, num_workers=2, batch_sampler=SizeAwareSampler(trainset, MAX_DATA))
 
+    print(f"init model and send to device: {device}")
     n_phones = len(phoneme_inventory)
     model = Model(devset.num_features, devset.num_speech_features, n_phones, devset.num_sessions).to(device)
 
@@ -261,6 +264,7 @@ def train_model(trainset, devset, device, save_sound_outputs=True, n_epochs=80):
         del state_dict['session_emb.weight']
         model.load_state_dict(state_dict, strict=False)
 
+    print("load optimizer and init learning rate scheduler")
     optim = torch.optim.AdamW(model.parameters(), weight_decay=FLAGS.l2)
     lr_sched = torch.optim.lr_scheduler.ReduceLROnPlateau(optim, 'min', 0.5, patience=FLAGS.learning_rate_patience)
 
@@ -273,6 +277,8 @@ def train_model(trainset, devset, device, save_sound_outputs=True, n_epochs=80):
         iteration = iteration + 1
         if iteration <= FLAGS.learning_rate_warmup:
             set_lr(iteration*target_lr/FLAGS.learning_rate_warmup)
+
+    print("pre training loop...")
 
     batch_idx = 0
     for epoch_idx in range(n_epochs):
