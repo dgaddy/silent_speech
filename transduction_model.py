@@ -318,8 +318,8 @@ def train_model(trainset, devset, device, save_sound_outputs=True, n_epochs=80):
 
             print(f"[TRAIN] EPOCH: {epoch_idx}, BATCH: {batch_idx}, appended_loseses")
 
-            # loss.backward()
-            loss.backward(torch.ones_like(loss))
+            loss.backward()
+            # loss.backward(torch.ones_like(loss))
 
             print(f"[TRAIN] EPOCH: {epoch_idx}, BATCH: {batch_idx}, calculating backprops")
 
