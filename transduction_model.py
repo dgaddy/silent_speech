@@ -96,10 +96,17 @@ class Model(nn.Module):
 
         print("model: init TransformerEncoder layer")
         encoder_layer = TransformerEncoderLayer(d_model=FLAGS.model_size, nhead=8, relative_positional=True, relative_positional_distance=100, dim_feedforward=3072)
+
         print("model: psot transformer layer")
         self.transformer = nn.TransformerEncoder(encoder_layer, FLAGS.num_layers)
+        
+        print("model: full transformer layer")
         self.w_out = nn.Linear(FLAGS.model_size, num_outs)
+        
+        print("model: w_oiut")
         self.w_aux = nn.Linear(FLAGS.model_size, num_aux_outs)
+
+        print("model: w_aux")
 
     def forward(self, x_feat, x_raw, session_ids):
         # x shape is (batch, time, electrode)
