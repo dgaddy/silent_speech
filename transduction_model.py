@@ -40,6 +40,7 @@ import time
 # neptune logging imports
 flags.DEFINE_string('neptune_project', '', 'Name of neptune.ai logging project (if applicable)')
 flags.DEFINE_string('neptune_api_token', '', 'Name of neptune.ai logging token (if applicable)')
+flags.DEFINE_string('neptune_experiment_name', '', 'Name of neptune.ai logging experiment name (if applicable')
 
 # set neptune
 import neptune.new as neptune
@@ -335,7 +336,8 @@ def main():
     device = 'cuda' if torch.cuda.is_available() and not FLAGS.debug else 'cpu'
 
     # experiment global features
-    run["experiment_name"] = "Initial gcp_testrun experiment"
+    run["experiment_name"] = FLAGS.experiment_name
+    #run["experiment_name"] = "Initial gcp_testrun experiment"
     run["batch_size"]    = FLAGS.batch_size
     run["model_size"]    = FLAGS.model_size
     run["num_layers"]    = FLAGS.num_layers
