@@ -262,8 +262,8 @@ def train_model(trainset, devset, device, save_sound_outputs=True, n_epochs=80):
 
     print("loading data using pytorch dataloader")
     MAX_DATA = int((256000 / 32) * FLAGS.batch_size)
-    # dataloader = torch.utils.data.DataLoader(training_subset, pin_memory=(device=='cuda'), collate_fn=devset.collate_fixed_length, num_workers=8, batch_sampler=SizeAwareSampler(trainset, MAX_DATA))
-    dataloader = torch.utils.data.DataLoader(training_subset, pin_memory=True, collate_fn=devset.collate_fixed_length, num_workers=2, batch_sampler=SizeAwareSampler(trainset, MAX_DATA))
+    dataloader = torch.utils.data.DataLoader(training_subset, pin_memory=(device=='cuda'), collate_fn=devset.collate_fixed_length, num_workers=2, batch_sampler=SizeAwareSampler(trainset, MAX_DATA))
+    # dataloader = torch.utils.data.DataLoader(training_subset, pin_memory=True, collate_fn=devset.collate_fixed_length, num_workers=2, batch_sampler=SizeAwareSampler(trainset, MAX_DATA))
 
     print(f"init model and send to device: {device}")
     n_phones = len(phoneme_inventory)
