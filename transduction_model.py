@@ -268,6 +268,8 @@ def train_model(trainset, devset, device, save_sound_outputs=True, n_epochs=80):
     print(f"init model and send to device: {device}")
     n_phones = len(phoneme_inventory)
     model = Model(devset.num_features, devset.num_speech_features, n_phones, devset.num_sessions).to(device)
+    
+    print(f"finish sending to device: {device}")
 
     if FLAGS.start_training_from is not None:
         state_dict = torch.load(FLAGS.start_training_from)
