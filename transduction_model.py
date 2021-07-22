@@ -81,6 +81,7 @@ class Model(nn.Module):
     def __init__(self, num_ins, num_outs, num_aux_outs, num_sessions):
         super().__init__()
 
+        print("model: init conv blocks")
         self.conv_blocks = nn.Sequential(
             ResBlock(8, FLAGS.model_size, 2),
             ResBlock(FLAGS.model_size, FLAGS.model_size, 2),
@@ -93,6 +94,7 @@ class Model(nn.Module):
             self.session_emb = nn.Embedding(num_sessions, emb_size)
             self.w_emb = nn.Linear(emb_size, FLAGS.model_size)
 
+        print("model: init TransformerEncoder layer")
         encoder_layer = TransformerEncoderLayer(d_model=FLAGS.model_size, nhead=8, relative_positional=True, relative_positional_distance=100, dim_feedforward=3072)
         self.transformer = nn.TransformerEncoder(encoder_layer, FLAGS.num_layers)
         self.w_out = nn.Linear(FLAGS.model_size, num_outs)
