@@ -336,7 +336,7 @@ def main():
     device = 'cuda' if torch.cuda.is_available() and not FLAGS.debug else 'cpu'
 
     # experiment global features
-    run["experiment_name"] = FLAGS.experiment_name
+    run["experiment_name"] = FLAGS.neptune_experiment_name
     #run["experiment_name"] = "Initial gcp_testrun experiment"
     run["batch_size"]    = FLAGS.batch_size
     run["model_size"]    = FLAGS.model_size
