@@ -268,7 +268,7 @@ def train_model(trainset, devset, device, save_sound_outputs=True, n_epochs=80):
     print(f"init model and send to device: {device}")
     n_phones = len(phoneme_inventory)
     model = Model(devset.num_features, devset.num_speech_features, n_phones, devset.num_sessions)
-    print("extra test")
+    print(f"extra test: {device}")
     model = model.to(device)
     
     print(f"finish sending to device: {device}")
