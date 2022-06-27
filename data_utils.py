@@ -1,13 +1,15 @@
+import string
+
 import numpy as np
 import librosa
 import soundfile as sf
+from textgrids import TextGrid
 
 import torch
 import matplotlib.pyplot as plt
 
 from absl import flags
 FLAGS = flags.FLAGS
-flags.DEFINE_boolean('mel_spectrogram', False, 'use mel spectrogram features instead of mfccs for audio')
 flags.DEFINE_string('normalizers_file', 'normalizers.pkl', 'file with pickled feature normalizers')
 
 phoneme_inventory = ['aa','ae','ah','ao','aw','ax','axr','ay','b','ch','d','dh','dx','eh','el','em','en','er','ey','f','g','hh','hv','ih','iy','jh','k','l','m','n','nx','ng','ow','oy','p','r','s','sh','t','th','uh','uw','v','w','y','z','zh','sil']
@@ -22,9 +24,43 @@ def normalize_volume(audio):
         audio = audio / max_val
     return audio
 
+def dynamic_range_compression_torch(x, C=1, clip_val=1e-5):
+    return torch.log(torch.clamp(x, min=clip_val) * C)
+
+def spectral_normalize_torch(magnitudes):
+    output = dynamic_range_compression_torch(magnitudes)
+    return output
+
+mel_basis = {}
+hann_window = {}
+
+def mel_spectrogram(y, n_fft, num_mels, sampling_rate, hop_size, win_size, fmin, fmax, center=False):
+    if torch.min(y) < -1.:
+        print('min value is ', torch.min(y))
+    if torch.max(y) > 1.:
+        print('max value is ', torch.max(y))
+
+    global mel_basis, hann_window
+    if fmax not in mel_basis:
+        mel = librosa.filters.mel(sampling_rate, n_fft, num_mels, fmin, fmax)
+        mel_basis[str(fmax)+'_'+str(y.device)] = torch.from_numpy(mel).float().to(y.device)
+        hann_window[str(y.device)] = torch.hann_window(win_size).to(y.device)
+
+    y = torch.nn.functional.pad(y.unsqueeze(1), (int((n_fft-hop_size)/2), int((n_fft-hop_size)/2)), mode='reflect')
+    y = y.squeeze(1)
+
+    spec = torch.stft(y, n_fft, hop_length=hop_size, win_length=win_size, window=hann_window[str(y.device)],
+                      center=center, pad_mode='reflect', normalized=False, onesided=True)
+
+    spec = torch.sqrt(spec.pow(2).sum(-1)+(1e-9))
+
+    spec = torch.matmul(mel_basis[str(fmax)+'_'+str(y.device)], spec)
+    spec = spectral_normalize_torch(spec)
+
+    return spec
+
 def load_audio(filename, start=None, end=None, max_frames=None, renormalize_volume=False):
     audio, r = sf.read(filename)
-    assert r == 16000
 
     if len(audio.shape) > 1:
         audio = audio[:,0] # select first channel of stero audio
@@ -33,17 +69,16 @@ def load_audio(filename, start=None, end=None, max_frames=None, renormalize_volu
 
     if renormalize_volume:
         audio = normalize_volume(audio)
-    if FLAGS.mel_spectrogram:
-        mfccs = librosa.feature.melspectrogram(audio, sr=16000, n_mels=128, center=False, n_fft=512, win_length=432, hop_length=160).T
-        mfccs = np.log(mfccs+1e-5)
+    if r == 16000:
+        audio = librosa.resample(audio, 16000, 22050)
     else:
-        mfccs = librosa.feature.mfcc(audio, sr=16000, n_mfcc=26, n_fft=512, win_length=432, hop_length=160, center=False).T
-    audio_discrete = librosa.core.mu_compress(audio, mu=255, quantize=True)+128
-    if max_frames is not None and mfccs.shape[0] > max_frames:
-        mfccs = mfccs[:max_frames,:]
-    audio_length = 160*mfccs.shape[0]+(432-160)
-    audio_discrete = audio_discrete[:audio_length] # cut off audio to match framed length
-    return mfccs.astype(np.float32), audio_discrete
+        assert r == 22050
+    audio = np.clip(audio, -1, 1) # because resampling sometimes pushes things out of range
+    pytorch_mspec = mel_spectrogram(torch.tensor(audio, dtype=torch.float32).unsqueeze(0), 1024, 80, 22050, 256, 1024, 0, 8000, center=False)
+    mspec = pytorch_mspec.squeeze(0).T.numpy()
+    if max_frames is not None and mspec.shape[0] > max_frames:
+        mspec = mspec[:max_frames,:]
+    return mspec
 
 def double_average(x):
     assert len(x.shape) == 1
@@ -123,7 +158,7 @@ def combine_fixed_length(tensor_list, length):
     if total_length % length != 0:
         pad_length = length - (total_length % length)
         tensor_list = list(tensor_list) # copy
-        tensor_list.append(torch.zeros(pad_length,*tensor_list[0].size()[1:], dtype=tensor_list[0].dtype))
+        tensor_list.append(torch.zeros(pad_length,*tensor_list[0].size()[1:], dtype=tensor_list[0].dtype, device=tensor_list[0].device))
         total_length += pad_length
     tensor = torch.cat(tensor_list, 0)
     n = total_length // length
@@ -182,3 +217,23 @@ def print_confusion(confusion_mat, n=10):
         p1s = phoneme_inventory[p1]
         p2s = phoneme_inventory[p2]
         print(f'{p1s} {p2s} {v*100:.1f} {(confusion_mat[p1,p1]+confusion_mat[p2,p2])/(target_counts[p1]+target_counts[p2])*100:.1f}')
+
+def read_phonemes(textgrid_fname, max_len=None):
+    tg = TextGrid(textgrid_fname)
+    phone_ids = np.zeros(int(tg['phones'][-1].xmax*86.133)+1, dtype=np.int64)
+    phone_ids[:] = -1
+    phone_ids[-1] = phoneme_inventory.index('sil') # make sure list is long enough to cover full length of original sequence
+    for interval in tg['phones']:
+        phone = interval.text.lower()
+        if phone in ['', 'sp', 'spn']:
+            phone = 'sil'
+        if phone[-1] in string.digits:
+            phone = phone[:-1]
+        ph_id = phoneme_inventory.index(phone)
+        phone_ids[int(interval.xmin*86.133):int(interval.xmax*86.133)] = ph_id
+    assert (phone_ids >= 0).all(), 'missing aligned phones'
+
+    if max_len is not None:
+        phone_ids = phone_ids[:max_len]
+        assert phone_ids.shape[0] == max_len
+    return phone_ids

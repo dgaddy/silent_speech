@@ -11,14 +11,15 @@ import sys
 import pickle
 import string
 import logging
+from functools import lru_cache
+from copy import copy
 
 import librosa
 import soundfile as sf
-from textgrids import TextGrid
 
 import torch
 
-from data_utils import load_audio, get_emg_features, FeatureNormalizer, combine_fixed_length, phoneme_inventory
+from data_utils import load_audio, get_emg_features, FeatureNormalizer, phoneme_inventory, read_phonemes
 
 from absl import flags
 FLAGS = flags.FLAGS
@@ -71,8 +72,8 @@ def load_utterance(base_dir, index, limit_length=False, debug=False, text_align_
     x = apply_to_all(notch_harmonics, x, 60, 1000)
     x = apply_to_all(remove_drift, x, 1000)
     x = x[raw_emg_before.shape[0]:x.shape[0]-raw_emg_after.shape[0],:]
-    emg_orig = apply_to_all(subsample, x, 800, 1000)
-    x = apply_to_all(subsample, x, 600, 1000)
+    emg_orig = apply_to_all(subsample, x, 689.06, 1000)
+    x = apply_to_all(subsample, x, 516.79, 1000)
     emg = x
 
     for c in FLAGS.remove_channels:
@@ -81,11 +82,12 @@ def load_utterance(base_dir, index, limit_length=False, debug=False, text_align_
 
     emg_features = get_emg_features(emg)
 
-    mfccs, audio_discrete = load_audio(os.path.join(base_dir, f'{index}_audio_clean.flac'),
+    mfccs = load_audio(os.path.join(base_dir, f'{index}_audio_clean.flac'),
             max_frames=min(emg_features.shape[0], 800 if limit_length else float('inf')))
 
     if emg_features.shape[0] > mfccs.shape[0]:
         emg_features = emg_features[:mfccs.shape[0],:]
+    assert emg_features.shape[0] == mfccs.shape[0]
     emg = emg[6:6+6*emg_features.shape[0],:]
     emg_orig = emg_orig[8:8+8*emg_features.shape[0],:]
     assert emg.shape[0] == emg_features.shape[0]*6
@@ -96,29 +98,11 @@ def load_utterance(base_dir, index, limit_length=False, debug=False, text_align_
     sess = os.path.basename(base_dir)
     tg_fname = f'{text_align_directory}/{sess}/{sess}_{index}_audio.TextGrid'
     if os.path.exists(tg_fname):
-        phonemes = read_phonemes(tg_fname, mfccs.shape[0], phoneme_inventory)
+        phonemes = read_phonemes(tg_fname, mfccs.shape[0])
     else:
         phonemes = np.zeros(mfccs.shape[0], dtype=np.int64)+phoneme_inventory.index('sil')
 
-    return mfccs, audio_discrete, emg_features, info['text'], (info['book'],info['sentence_index']), phonemes, emg_orig.astype(np.float32)
-
-
-def read_phonemes(textgrid_fname, mfcc_len, phone_inventory):
-    tg = TextGrid(textgrid_fname)
-    phone_ids = np.zeros(int(tg['phones'][-1].xmax*100), dtype=np.int64)
-    phone_ids[:] = -1
-    for interval in tg['phones']:
-        phone = interval.text.lower()
-        if phone in ['', 'sp', 'spn']:
-            phone = 'sil'
-        if phone[-1] in string.digits:
-            phone = phone[:-1]
-        ph_id = phone_inventory.index(phone)
-        phone_ids[int(interval.xmin*100):int(interval.xmax*100)] = ph_id
-    assert (phone_ids >= 0).all(), 'missing aligned phones'
-
-    phone_ids = phone_ids[1:mfcc_len+1] # mfccs is 2-3 shorter due to edge effects
-    return phone_ids
+    return mfccs, emg_features, info['text'], (info['book'],info['sentence_index']), phonemes, emg_orig.astype(np.float32)
 
 class EMGDirectory(object):
     def __init__(self, session_index, directory, silent, exclude_from_testset=False):
@@ -216,26 +200,35 @@ class EMGDataset(torch.utils.data.Dataset):
         if not self.no_normalizers:
             self.mfcc_norm, self.emg_norm = pickle.load(open(FLAGS.normalizers_file,'rb'))
 
-        sample_mfccs, _, sample_emg, _, _, _, _ = load_utterance(self.example_indices[0][0].directory, self.example_indices[0][1])
+        sample_mfccs, sample_emg, _, _, _, _ = load_utterance(self.example_indices[0][0].directory, self.example_indices[0][1])
         self.num_speech_features = sample_mfccs.shape[1]
         self.num_features = sample_emg.shape[1]
         self.limit_length = limit_length
         self.num_sessions = len(directories)
 
     def silent_subset(self):
+        result = copy(self)
         silent_indices = []
-        for i, (d, _) in enumerate(self.example_indices):
-            if d.silent:
-                silent_indices.append(i)
-        return torch.utils.data.Subset(self, silent_indices)
+        for example in self.example_indices:
+            if example[0].silent:
+                silent_indices.append(example)
+        result.example_indices = silent_indices
+        return result
+
+    def subset(self, fraction):
+        result = copy(self)
+        result.example_indices = self.example_indices[:int(fraction*len(self.example_indices))]
+        return result
 
     def __len__(self):
         return len(self.example_indices)
 
+    @lru_cache(maxsize=None)
     def __getitem__(self, i):
         directory_info, idx = self.example_indices[i]
-        mfccs, audio, emg, text, book_location, phonemes, raw_emg = load_utterance(directory_info.directory, idx, self.limit_length, text_align_directory=self.text_align_directory)
-        raw_emg = raw_emg / 10
+        mfccs, emg, text, book_location, phonemes, raw_emg = load_utterance(directory_info.directory, idx, self.limit_length, text_align_directory=self.text_align_directory)
+        raw_emg = raw_emg / 20
+        raw_emg = 50*np.tanh(raw_emg/50.)
 
         if not self.no_normalizers:
             mfccs = self.mfcc_norm.normalize(mfccs)
@@ -243,27 +236,31 @@ class EMGDataset(torch.utils.data.Dataset):
             emg = 8*np.tanh(emg/8.)
 
         session_ids = np.full(emg.shape[0], directory_info.session_index, dtype=np.int64)
+        audio_file = f'{directory_info.directory}/{idx}_audio_clean.flac'
 
-        result = {'audio_features':mfccs, 'quantized_audio':audio, 'emg':emg, 'text':text, 'file_label':idx, 'session_ids':session_ids, 'book_location':book_location, 'silent':directory_info.silent, 'raw_emg':raw_emg}
+        result = {'audio_features':torch.from_numpy(mfccs).pin_memory(), 'emg':torch.from_numpy(emg).pin_memory(), 'text':text, 'file_label':idx, 'session_ids':torch.from_numpy(session_ids).pin_memory(), 'book_location':book_location, 'silent':directory_info.silent, 'raw_emg':torch.from_numpy(raw_emg).pin_memory()}
 
         if directory_info.silent:
             voiced_directory, voiced_idx = self.voiced_data_locations[book_location]
-            voiced_mfccs, _, voiced_emg, _, _, phonemes, _ = load_utterance(voiced_directory.directory, voiced_idx, False, text_align_directory=self.text_align_directory)
+            voiced_mfccs, voiced_emg, _, _, phonemes, _ = load_utterance(voiced_directory.directory, voiced_idx, False, text_align_directory=self.text_align_directory)
 
             if not self.no_normalizers:
                 voiced_mfccs = self.mfcc_norm.normalize(voiced_mfccs)
                 voiced_emg = self.emg_norm.normalize(voiced_emg)
                 voiced_emg = 8*np.tanh(voiced_emg/8.)
 
-            result['parallel_voiced_audio_features'] = voiced_mfccs
-            result['parallel_voiced_emg'] = voiced_emg
+            result['parallel_voiced_audio_features'] = torch.from_numpy(voiced_mfccs).pin_memory()
+            result['parallel_voiced_emg'] = torch.from_numpy(voiced_emg).pin_memory()
 
-        result['phonemes'] = phonemes # either from this example if vocalized or aligned example if silent
+            audio_file = f'{voiced_directory.directory}/{voiced_idx}_audio_clean.flac'
+
+        result['phonemes'] = torch.from_numpy(phonemes).pin_memory() # either from this example if vocalized or aligned example if silent
+        result['audio_file'] = audio_file
 
         return result
 
     @staticmethod
-    def collate_fixed_length(batch):
+    def collate_raw(batch):
         batch_size = len(batch)
         audio_features = []
         audio_feature_lengths = []
@@ -277,23 +274,20 @@ class EMGDataset(torch.utils.data.Dataset):
                 audio_features.append(ex['audio_features'])
                 audio_feature_lengths.append(ex['audio_features'].shape[0])
                 parallel_emg.append(np.zeros(1))
-        audio_features = [torch.from_numpy(af) for af in audio_features]
-        parallel_emg = [torch.from_numpy(pe) for pe in parallel_emg]
-        phonemes = [torch.from_numpy(ex['phonemes']) for ex in batch]
-        emg = [torch.from_numpy(ex['emg']) for ex in batch]
-        raw_emg = [torch.from_numpy(ex['raw_emg']) for ex in batch]
-        session_ids = [torch.from_numpy(ex['session_ids']) for ex in batch]
+        phonemes = [ex['phonemes'] for ex in batch]
+        emg = [ex['emg'] for ex in batch]
+        raw_emg = [ex['raw_emg'] for ex in batch]
+        session_ids = [ex['session_ids'] for ex in batch]
         lengths = [ex['emg'].shape[0] for ex in batch]
         silent = [ex['silent'] for ex in batch]
 
-        seq_len = 200
-        result = {'audio_features':combine_fixed_length(audio_features, seq_len),
+        result = {'audio_features':audio_features,
                   'audio_feature_lengths':audio_feature_lengths,
-                  'emg':combine_fixed_length(emg, seq_len),
-                  'raw_emg':combine_fixed_length(raw_emg, seq_len*8),
+                  'emg':emg,
+                  'raw_emg':raw_emg,
                   'parallel_voiced_emg':parallel_emg,
                   'phonemes':phonemes,
-                  'session_ids':combine_fixed_length(session_ids, seq_len),
+                  'session_ids':session_ids,
                   'lengths':lengths,
                   'silent':silent}
         return result

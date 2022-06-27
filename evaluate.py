@@ -9,10 +9,12 @@ from transduction_model import test, save_output, Model
 from read_emg import EMGDataset
 from asr import evaluate
 from data_utils import phoneme_inventory, print_confusion
+from vocoder import Vocoder
 
 from absl import flags
 FLAGS = flags.FLAGS
 flags.DEFINE_list('models', [], 'identifiers of models to evaluate')
+flags.DEFINE_boolean('dev', False, 'evaluate dev insead of test')
 
 class EnsembleModel(nn.Module):
     def __init__(self, models):
@@ -35,15 +37,15 @@ def main():
             logging.StreamHandler()
             ], level=logging.INFO, format="%(message)s")
 
-    testset = EMGDataset(test=True)
+    dev = FLAGS.dev
+    testset = EMGDataset(dev=dev, test=not dev)
 
-    device = 'cuda' if torch.cuda.is_available() and not FLAGS.debug else 'cpu'
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
     models = []
     for fname in FLAGS.models:
         state_dict = torch.load(fname)
-        n_sess = 1 if FLAGS.no_session_embed else state_dict["session_emb.weight"].size(0)
-        model = Model(testset.num_features, testset.num_speech_features, len(phoneme_inventory), n_sess).to(device)
+        model = Model(testset.num_features, testset.num_speech_features, len(phoneme_inventory)).to(device)
         model.load_state_dict(state_dict)
         models.append(model)
     ensemble = EnsembleModel(models)
@@ -51,8 +53,10 @@ def main():
     _, _, confusion = test(ensemble, testset, device)
     print_confusion(confusion)
 
+    vocoder = Vocoder()
+
     for i, datapoint in enumerate(testset):
-        save_output(ensemble, datapoint, os.path.join(FLAGS.output_directory, f'example_output_{i}.wav'), device)
+        save_output(ensemble, datapoint, os.path.join(FLAGS.output_directory, f'example_output_{i}.wav'), device, testset.mfcc_norm, vocoder)
 
     evaluate(testset, FLAGS.output_directory)
 

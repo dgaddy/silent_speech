@@ -3,31 +3,36 @@ import sys
 import numpy as np
 import logging
 import subprocess
+import random
+
+import soundfile as sf
 
 import torch
 from torch import nn
 import torch.nn.functional as F
 
 from read_emg import EMGDataset, SizeAwareSampler
-from wavenet_model import WavenetModel, save_output as save_wavenet_output
 from align import align_from_distances
 from asr import evaluate
 from transformer import TransformerEncoderLayer
-from data_utils import phoneme_inventory, decollate_tensor
+from data_utils import phoneme_inventory, decollate_tensor, combine_fixed_length
+from vocoder import Vocoder
 
 from absl import flags
 FLAGS = flags.FLAGS
 flags.DEFINE_integer('model_size', 768, 'number of hidden dimensions')
 flags.DEFINE_integer('num_layers', 6, 'number of layers')
 flags.DEFINE_integer('batch_size', 32, 'training batch size')
+flags.DEFINE_integer('epochs', 80, 'number of training epochs')
 flags.DEFINE_float('learning_rate', 1e-3, 'learning rate')
 flags.DEFINE_integer('learning_rate_patience', 5, 'learning rate decay patience')
 flags.DEFINE_integer('learning_rate_warmup', 500, 'steps of linear warmup')
 flags.DEFINE_string('start_training_from', None, 'start training from this model')
 flags.DEFINE_float('data_size_fraction', 1.0, 'fraction of training data to use')
-flags.DEFINE_boolean('no_session_embed', False, "don't use a session embedding")
-flags.DEFINE_float('phoneme_loss_weight', 0.1, 'weight of auxiliary phoneme prediction loss')
+flags.DEFINE_float('phoneme_loss_weight', 0.5, 'weight of auxiliary phoneme prediction loss')
 flags.DEFINE_float('l2', 1e-7, 'weight decay')
+flags.DEFINE_float('dropout', .2, 'dropout')
+flags.DEFINE_string('output_directory', 'output', 'output directory')
 
 class ResBlock(nn.Module):
     def __init__(self, num_ins, num_outs, stride=1):
@@ -58,7 +63,7 @@ class ResBlock(nn.Module):
         return F.relu(x + res)
 
 class Model(nn.Module):
-    def __init__(self, num_ins, num_outs, num_aux_outs, num_sessions):
+    def __init__(self, num_ins, num_outs, num_aux_outs):
         super().__init__()
 
         self.conv_blocks = nn.Sequential(
@@ -68,12 +73,7 @@ class Model(nn.Module):
         )
         self.w_raw_in = nn.Linear(FLAGS.model_size, FLAGS.model_size)
 
-        if not FLAGS.no_session_embed:
-            emb_size = 32
-            self.session_emb = nn.Embedding(num_sessions, emb_size)
-            self.w_emb = nn.Linear(emb_size, FLAGS.model_size)
-
-        encoder_layer = TransformerEncoderLayer(d_model=FLAGS.model_size, nhead=8, relative_positional=True, relative_positional_distance=100, dim_feedforward=3072)
+        encoder_layer = TransformerEncoderLayer(d_model=FLAGS.model_size, nhead=8, relative_positional=True, relative_positional_distance=100, dim_feedforward=3072, dropout=FLAGS.dropout)
         self.transformer = nn.TransformerEncoder(encoder_layer, FLAGS.num_layers)
         self.w_out = nn.Linear(FLAGS.model_size, num_outs)
         self.w_aux = nn.Linear(FLAGS.model_size, num_aux_outs)
@@ -81,16 +81,18 @@ class Model(nn.Module):
     def forward(self, x_feat, x_raw, session_ids):
         # x shape is (batch, time, electrode)
 
+        if self.training:
+            r = random.randrange(8)
+            if r > 0:
+                x_raw[:,:-r,:] = x_raw[:,r:,:] # shift left r
+                x_raw[:,-r:,:] = 0
+
         x_raw = x_raw.transpose(1,2) # put channel before time for conv
         x_raw = self.conv_blocks(x_raw)
         x_raw = x_raw.transpose(1,2)
         x_raw = self.w_raw_in(x_raw)
 
-        if FLAGS.no_session_embed:
-            x = x_raw
-        else:
-            emb = self.session_emb(session_ids)
-            x = x_raw + self.w_emb(emb)
+        x = x_raw
 
         x = x.transpose(0,1) # put time first
         x = self.transformer(x)
@@ -100,19 +102,20 @@ class Model(nn.Module):
 def test(model, testset, device):
     model.eval()
 
-    dataloader = torch.utils.data.DataLoader(testset, batch_size=32, collate_fn=testset.collate_fixed_length)
+    dataloader = torch.utils.data.DataLoader(testset, batch_size=32, collate_fn=testset.collate_raw)
     losses = []
     accuracies = []
     phoneme_confusion = np.zeros((len(phoneme_inventory),len(phoneme_inventory)))
+    seq_len = 200
     with torch.no_grad():
-        for example in dataloader:
-            X = example['emg'].to(device)
-            X_raw = example['raw_emg'].to(device)
-            sess = example['session_ids'].to(device)
+        for batch in dataloader:
+            X = combine_fixed_length([t.to(device, non_blocking=True) for t in batch['emg']], seq_len)
+            X_raw = combine_fixed_length([t.to(device, non_blocking=True) for t in batch['raw_emg']], seq_len*8)
+            sess = combine_fixed_length([t.to(device, non_blocking=True) for t in batch['session_ids']], seq_len)
 
             pred, phoneme_pred = model(X, X_raw, sess)
 
-            loss, phon_acc = dtw_loss(pred, phoneme_pred, example, True, phoneme_confusion)
+            loss, phon_acc = dtw_loss(pred, phoneme_pred, batch, True, phoneme_confusion)
             losses.append(loss.item())
 
             accuracies.append(phon_acc)
@@ -120,37 +123,56 @@ def test(model, testset, device):
     model.train()
     return np.mean(losses), np.mean(accuracies), phoneme_confusion #TODO size-weight average
 
-def save_output(model, datapoint, filename, device, gold_mfcc=False):
+def save_output(model, datapoint, filename, device, audio_normalizer, vocoder):
     model.eval()
-    if gold_mfcc:
-        y = datapoint['audio_features']
-    else:
-        with torch.no_grad():
-            sess = torch.tensor(datapoint['session_ids'], device=device).unsqueeze(0)
-            X = torch.tensor(datapoint['emg'], dtype=torch.float32, device=device).unsqueeze(0)
-            X_raw = torch.tensor(datapoint['raw_emg'], dtype=torch.float32, device=device).unsqueeze(0)
+    with torch.no_grad():
+        sess = torch.tensor(datapoint['session_ids'], device=device).unsqueeze(0)
+        X = torch.tensor(datapoint['emg'], dtype=torch.float32, device=device).unsqueeze(0)
+        X_raw = torch.tensor(datapoint['raw_emg'], dtype=torch.float32, device=device).unsqueeze(0)
 
-            pred, _ = model(X, X_raw, sess)
-            pred = pred.squeeze(0)
+        pred, _ = model(X, X_raw, sess)
+        y = pred.squeeze(0)
 
-            y = pred.cpu().detach().numpy()
+        y = audio_normalizer.inverse(y.cpu()).to(device)
 
-    wavenet_model = WavenetModel(y.shape[1]).to(device)
-    assert FLAGS.pretrained_wavenet_model is not None
-    wavenet_model.load_state_dict(torch.load(FLAGS.pretrained_wavenet_model))
-    save_wavenet_output(wavenet_model, y, filename, device)
+        audio = vocoder(y).cpu().numpy()
+
+    sf.write(filename, audio, 22050)
+
     model.train()
+
+def get_aligned_prediction(model, datapoint, device, audio_normalizer):
+    model.eval()
+    with torch.no_grad():
+        silent = datapoint['silent']
+        sess = datapoint['session_ids'].to(device).unsqueeze(0)
+        X = datapoint['emg'].to(device).unsqueeze(0)
+        X_raw = datapoint['raw_emg'].to(device).unsqueeze(0)
+        y = datapoint['parallel_voiced_audio_features' if silent else 'audio_features'].to(device).unsqueeze(0)
+
+        pred, _ = model(X, X_raw, sess) # (1, seq, dim)
+
+        if silent:
+            costs = torch.cdist(pred, y).squeeze(0)
+            alignment = align_from_distances(costs.T.detach().cpu().numpy())
+            pred_aligned = pred.squeeze(0)[alignment]
+        else:
+            pred_aligned = pred.squeeze(0)
+
+        pred_aligned = audio_normalizer.inverse(pred_aligned.cpu())
+
+    model.train()
+    return pred_aligned
 
 def dtw_loss(predictions, phoneme_predictions, example, phoneme_eval=False, phoneme_confusion=None):
     device = predictions.device
+
     predictions = decollate_tensor(predictions, example['lengths'])
     phoneme_predictions = decollate_tensor(phoneme_predictions, example['lengths'])
 
-    audio_features = example['audio_features'].to(device)
+    audio_features = [t.to(device, non_blocking=True) for t in example['audio_features']]
 
     phoneme_targets = example['phonemes']
-
-    audio_features = decollate_tensor(audio_features, example['audio_feature_lengths'])
 
     losses = []
     correct_phones = 0
@@ -189,7 +211,7 @@ def dtw_loss(predictions, phoneme_predictions, example, phoneme_eval=False, phon
 
             assert len(pred_phone.size()) == 2 and len(y_phone.size()) == 1
             phoneme_loss = F.cross_entropy(pred_phone, y_phone, reduction='sum')
-            loss = dists.cpu().sum() + FLAGS.phoneme_loss_weight * phoneme_loss.cpu()
+            loss = dists.sum() + FLAGS.phoneme_loss_weight * phoneme_loss
 
             if phoneme_eval:
                 pred_phone = pred_phone.argmax(-1)
@@ -203,20 +225,24 @@ def dtw_loss(predictions, phoneme_predictions, example, phoneme_eval=False, phon
 
     return sum(losses)/total_length, correct_phones/total_length
 
-def train_model(trainset, devset, device, save_sound_outputs=True, n_epochs=80):
+def train_model(trainset, devset, device, save_sound_outputs=True):
+    n_epochs = FLAGS.epochs
+
     if FLAGS.data_size_fraction >= 1:
         training_subset = trainset
     else:
-        training_subset = torch.utils.data.Subset(trainset, list(range(int(len(trainset)*FLAGS.data_size_fraction))))
-    dataloader = torch.utils.data.DataLoader(training_subset, pin_memory=(device=='cuda'), collate_fn=devset.collate_fixed_length, num_workers=8, batch_sampler=SizeAwareSampler(trainset, 256000))
+        training_subset = trainset.subset(FLAGS.data_size_fraction)
+    dataloader = torch.utils.data.DataLoader(training_subset, pin_memory=(device=='cuda'), collate_fn=devset.collate_raw, num_workers=0, batch_sampler=SizeAwareSampler(training_subset, 256000))
 
     n_phones = len(phoneme_inventory)
-    model = Model(devset.num_features, devset.num_speech_features, n_phones, devset.num_sessions).to(device)
+    model = Model(devset.num_features, devset.num_speech_features, n_phones).to(device)
 
     if FLAGS.start_training_from is not None:
         state_dict = torch.load(FLAGS.start_training_from)
-        del state_dict['session_emb.weight']
         model.load_state_dict(state_dict, strict=False)
+
+    if save_sound_outputs:
+        vocoder = Vocoder()
 
     optim = torch.optim.AdamW(model.parameters(), weight_decay=FLAGS.l2)
     lr_sched = torch.optim.lr_scheduler.ReduceLROnPlateau(optim, 'min', 0.5, patience=FLAGS.learning_rate_patience)
@@ -231,20 +257,22 @@ def train_model(trainset, devset, device, save_sound_outputs=True, n_epochs=80):
         if iteration <= FLAGS.learning_rate_warmup:
             set_lr(iteration*target_lr/FLAGS.learning_rate_warmup)
 
+    seq_len = 200
+
     batch_idx = 0
     for epoch_idx in range(n_epochs):
         losses = []
-        for example in dataloader:
+        for batch in dataloader:
             optim.zero_grad()
             schedule_lr(batch_idx)
 
-            X = example['emg'].to(device)
-            X_raw = example['raw_emg'].to(device)
-            sess = example['session_ids'].to(device)
+            X = combine_fixed_length([t.to(device, non_blocking=True) for t in batch['emg']], seq_len)
+            X_raw = combine_fixed_length([t.to(device, non_blocking=True) for t in batch['raw_emg']], seq_len*8)
+            sess = combine_fixed_length([t.to(device, non_blocking=True) for t in batch['session_ids']], seq_len)
 
             pred, phoneme_pred = model(X, X_raw, sess)
 
-            loss, _ = dtw_loss(pred, phoneme_pred, example)
+            loss, _ = dtw_loss(pred, phoneme_pred, batch)
             losses.append(loss.item())
 
             loss.backward()
@@ -257,15 +285,13 @@ def train_model(trainset, devset, device, save_sound_outputs=True, n_epochs=80):
         logging.info(f'finished epoch {epoch_idx+1} - validation loss: {val:.4f} training loss: {train_loss:.4f} phoneme accuracy: {phoneme_acc*100:.2f}')
         torch.save(model.state_dict(), os.path.join(FLAGS.output_directory,'model.pt'))
         if save_sound_outputs:
-            save_output(model, devset[0], os.path.join(FLAGS.output_directory, f'epoch_{epoch_idx}_output.wav'), device)
-
-    model.load_state_dict(torch.load(os.path.join(FLAGS.output_directory,'model.pt'))) # re-load best parameters
+            save_output(model, devset[0], os.path.join(FLAGS.output_directory, f'epoch_{epoch_idx}_output.wav'), device, devset.mfcc_norm, vocoder)
 
     if save_sound_outputs:
         for i, datapoint in enumerate(devset):
-            save_output(model, datapoint, os.path.join(FLAGS.output_directory, f'example_output_{i}.wav'), device)
+            save_output(model, datapoint, os.path.join(FLAGS.output_directory, f'example_output_{i}.wav'), device, devset.mfcc_norm, vocoder)
 
-    evaluate(devset, FLAGS.output_directory)
+        evaluate(devset, FLAGS.output_directory)
 
     return model
 
@@ -286,9 +312,9 @@ def main():
     logging.info('output example: %s', devset.example_indices[0])
     logging.info('train / dev split: %d %d',len(trainset),len(devset))
 
-    device = 'cuda' if torch.cuda.is_available() and not FLAGS.debug else 'cpu'
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
-    model = train_model(trainset, devset, device, save_sound_outputs=(FLAGS.pretrained_wavenet_model is not None))
+    model = train_model(trainset, devset, device, save_sound_outputs=(FLAGS.hifigan_checkpoint is not None))
 
 if __name__ == '__main__':
     FLAGS(sys.argv)
