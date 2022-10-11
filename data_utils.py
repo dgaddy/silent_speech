@@ -4,6 +4,8 @@ import numpy as np
 import librosa
 import soundfile as sf
 from textgrids import TextGrid
+import jiwer
+from unidecode import unidecode
 
 import torch
 import matplotlib.pyplot as plt
@@ -237,3 +239,20 @@ def read_phonemes(textgrid_fname, max_len=None):
         phone_ids = phone_ids[:max_len]
         assert phone_ids.shape[0] == max_len
     return phone_ids
+
+class TextTransform(object):
+    def __init__(self):
+        self.transformation = jiwer.Compose([jiwer.RemovePunctuation(), jiwer.ToLowerCase()])
+        self.chars = string.ascii_lowercase+string.digits+' '
+
+    def clean_text(self, text):
+        text = unidecode(text)
+        text = self.transformation(text)
+        return text
+
+    def text_to_int(self, text):
+        text = self.clean_text(text)
+        return [self.chars.index(c) for c in text]
+
+    def int_to_text(self, ints):
+        return ''.join(self.chars[i] for i in ints)

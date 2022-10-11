@@ -5,6 +5,8 @@ It is the official repository for the papers [Digital Voicing of Silent Speech](
 The current commit contains only the most recent model, but the versions from prior papers can be found in the commit history.
 On an ASR-based open vocabulary evaluation, the latest model achieves a WER of approximately 36%.
 
+The repository also includes code for directly converting silent speech to text.  See the section labeled [Silent Speech Recognition](#silent-speech-recognition).
+
 ## Data
 
 The EMG and audio data can be downloaded from <https://doi.org/10.5281/zenodo.4064408>.  The scripts expect the data to be located in a `emg_data` subdirectory by default, but the location can be overridden with flags (see the top of `read_emg.py`).
@@ -75,3 +77,30 @@ python make_vocoder_trainset.py --model ./models/transduction_model/model.pt --o
 The resulting files can be used for fine-tuning using the instructions in the hifi-gan repository.
 The pre-trained model was fine-tuned for 75,000 steps, starting from the `UNIVERSAL_V1` model provided by the HiFi-GAN repository.
 Although the HiFi-GAN is technically fine-tuned for the output of a specific transduction model, we found it to transfer quite well and shared a single HiFi-GAN for most experiments.
+
+# Silent Speech Recognition
+
+This section is about converting silent speech directly to text rather than synthesizing speech audio.
+The speech-to-text model uses the same neural architecture but with a CTC decoder, and achieves a WER of approximately 28% (as described in the dissertation [Voicing Silent Speech](https://www2.eecs.berkeley.edu/Pubs/TechRpts/2022/EECS-2022-68.pdf)).
+
+You will need to install the ctcdecode library in addition to the libraries listed above to use the recognition code.
+```
+pip install ctcdecode
+```
+
+And you will need to download a KenLM language model, such as this one from DeepSpeech:
+```
+curl https://github.com/mozilla/DeepSpeech/releases/download/v0.6.1/lm.binary
+```
+
+Pre-trained model weights can be downloaded from <https://doi.org/10.5281/zenodo.7183877>.
+
+To train a model, run
+```
+python recognition_model.py --output_directory "./models/recognition_model/"
+```
+
+To run a test set evaluation on a saved model, use
+```
+python recognition_model.py --evaluate_saved "./models/recognition_model/model.pt"
+```

@@ -9,7 +9,8 @@ import librosa
 import torch
 from torch import nn
 
-from transduction_model import get_aligned_prediction, Model
+from architecture import Model
+from transduction_model import get_aligned_prediction
 from read_emg import EMGDataset
 from data_utils import phoneme_inventory
 

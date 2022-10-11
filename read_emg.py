@@ -19,7 +19,7 @@ import soundfile as sf
 
 import torch
 
-from data_utils import load_audio, get_emg_features, FeatureNormalizer, phoneme_inventory, read_phonemes
+from data_utils import load_audio, get_emg_features, FeatureNormalizer, phoneme_inventory, read_phonemes, TextTransform
 
 from absl import flags
 FLAGS = flags.FLAGS
@@ -206,6 +206,8 @@ class EMGDataset(torch.utils.data.Dataset):
         self.limit_length = limit_length
         self.num_sessions = len(directories)
 
+        self.text_transform = TextTransform()
+
     def silent_subset(self):
         result = copy(self)
         silent_indices = []
@@ -238,7 +240,9 @@ class EMGDataset(torch.utils.data.Dataset):
         session_ids = np.full(emg.shape[0], directory_info.session_index, dtype=np.int64)
         audio_file = f'{directory_info.directory}/{idx}_audio_clean.flac'
 
-        result = {'audio_features':torch.from_numpy(mfccs).pin_memory(), 'emg':torch.from_numpy(emg).pin_memory(), 'text':text, 'file_label':idx, 'session_ids':torch.from_numpy(session_ids).pin_memory(), 'book_location':book_location, 'silent':directory_info.silent, 'raw_emg':torch.from_numpy(raw_emg).pin_memory()}
+        text_int = np.array(self.text_transform.text_to_int(text), dtype=np.int64)
+
+        result = {'audio_features':torch.from_numpy(mfccs).pin_memory(), 'emg':torch.from_numpy(emg).pin_memory(), 'text':text, 'text_int': torch.from_numpy(text_int).pin_memory(), 'file_label':idx, 'session_ids':torch.from_numpy(session_ids).pin_memory(), 'book_location':book_location, 'silent':directory_info.silent, 'raw_emg':torch.from_numpy(raw_emg).pin_memory()}
 
         if directory_info.silent:
             voiced_directory, voiced_idx = self.voiced_data_locations[book_location]
@@ -280,6 +284,8 @@ class EMGDataset(torch.utils.data.Dataset):
         session_ids = [ex['session_ids'] for ex in batch]
         lengths = [ex['emg'].shape[0] for ex in batch]
         silent = [ex['silent'] for ex in batch]
+        text_ints = [ex['text_int'] for ex in batch]
+        text_lengths = [ex['text_int'].shape[0] for ex in batch]
 
         result = {'audio_features':audio_features,
                   'audio_feature_lengths':audio_feature_lengths,
@@ -289,7 +295,9 @@ class EMGDataset(torch.utils.data.Dataset):
                   'phonemes':phonemes,
                   'session_ids':session_ids,
                   'lengths':lengths,
-                  'silent':silent}
+                  'silent':silent,
+                  'text_int':text_ints,
+                  'text_int_lengths':text_lengths}
         return result
 
 def make_normalizers():

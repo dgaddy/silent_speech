@@ -5,9 +5,10 @@ import logging
 import torch
 from torch import nn
 
-from transduction_model import test, save_output, Model
+from architecture import Model
+from transduction_model import test, save_output
 from read_emg import EMGDataset
-from asr import evaluate
+from asr_evaluation import evaluate
 from data_utils import phoneme_inventory, print_confusion
 from vocoder import Vocoder
 
