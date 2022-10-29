@@ -4,6 +4,7 @@ This repository contains code for synthesizing speech audio from silently mouthe
 It is the official repository for the papers [Digital Voicing of Silent Speech](https://aclanthology.org/2020.emnlp-main.445.pdf) at EMNLP 2020, [An Improved Model for Voicing Silent Speech](https://aclanthology.org/2021.acl-short.23.pdf) at ACL 2021, and the dissertation [Voicing Silent Speech](https://www2.eecs.berkeley.edu/Pubs/TechRpts/2022/EECS-2022-68.pdf).
 The current commit contains only the most recent model, but the versions from prior papers can be found in the commit history.
 On an ASR-based open vocabulary evaluation, the latest model achieves a WER of approximately 36%.
+Audio samples can be found [here](https://dgaddy.github.io/silent_speech_samples/June2022/).
 
 The repository also includes code for directly converting silent speech to text.  See the section labeled [Silent Speech Recognition](#silent-speech-recognition).
 
