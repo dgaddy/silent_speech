@@ -21,9 +21,9 @@ Note that there will not be an exception if the directory is not found, but logg
 This code requires Python 3.8 or later.
 We strongly recommend running in a new Anaconda environment.
 
-First we will do some conda installs.  Your environment must use CUDA 11.7 or later to support RTX 4090.
+First we will do some conda installs.  Your environment must use CUDA 11.8 or later to support RTX 4090.
 ```
-conda install pytorch==1.13.1 torchvision==0.14.1 torchaudio==0.13.1 pytorch-cuda=11.7 -c pytorch -c nvidia
+conda install pytorch==2.0 torchvision torchaudio pytorch-cuda=11.8 -c pytorch -c nvidia
 conda install libsndfile -c conda-forge
 ```
 
