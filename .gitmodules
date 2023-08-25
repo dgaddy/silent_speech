@@ -1,5 +1,5 @@
 [submodule "hifi-gan"]
-	path = hifi-gan
+	path = hifi_gan
 	url = https://github.com/jik876/hifi-gan.git
 	branch = main
 [submodule "text_alignments"]
