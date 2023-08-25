@@ -12,32 +12,33 @@ The repository also includes code for directly converting silent speech to text.
 
 The EMG and audio data can be downloaded from <https://doi.org/10.5281/zenodo.4064408>.  The scripts expect the data to be located in a `emg_data` subdirectory by default, but the location can be overridden with flags (see the top of `read_emg.py`).
 
-Force-aligned phonemes from the Montreal Forced Aligner can be downloaded from <https://github.com/dgaddy/silent_speech_alignments/raw/main/text_alignments.tar.gz>.
+Force-aligned phonemes from the Montreal Forced Aligner has been included in the git submodule.
 By default, this data is expected to be in a subdirectory `text_alignments`.
 Note that there will not be an exception if the directory is not found, but logged phoneme prediction accuracies reporting 100% is a sign that the directory has not been loaded correctly.
 
 ## Environment Setup
 
-This code requires Python 3.6 or later.
+This code requires Python 3.8 or later.
 We strongly recommend running in a new Anaconda environment.
 
-First we will do some conda installs.  Your environment must use CUDA 10.1 exactly, since DeepSpeech was compiled with this version.
+First we will do some conda installs.  Your environment must use CUDA 11.7 or later to support RTX 4090.
 ```
-conda install pytorch==1.7.1 torchaudio==0.7.2 cudatoolkit=10.1 -c pytorch
-conda install libsndfile=1.0.28 -c conda-forge
-```
-
-Pull HiFi-GAN into the `hifi_gan` folder (this replaces the WaveNet vocoder that was used in earlier versions).
-```
-git clone https://github.com/jik876/hifi-gan.git hifi_gan
+conda install pytorch==1.13.1 torchvision==0.14.1 torchaudio==0.13.1 pytorch-cuda=11.7 -c pytorch -c nvidia
+conda install libsndfile -c conda-forge
 ```
 
-The rest of the required packages can be installed with pip.
+HiFi-GAN has been included in the git submodule. (this replaces the WaveNet vocoder that was used in earlier versions).
+
+The rest of the required packages can be installed with pip or conda.
 ```
-pip install absl-py librosa soundfile matplotlib scipy numba jiwer unidecode deepspeech==0.8.2 praat-textgrids
+conda install absl-py numpy=1.23 librosa=0.8.1 pysoundfile matplotlib scipy numba unidecode 
+pip install jiwer deepspeech==0.9.3 praat-textgrids noisereduce==1.1.0
 ```
 
-Download pre-trained DeepSpeech model files.  It is important that you use DeepSpeech version 0.7.0 model files to maintain consistency of evaluation.  Note that the DeepSpeech pip package we recommend is version 0.8.2 (which uses a more up-to-date CUDA), but this is compatible with version 0.7.x model files.
+librosa 0.9.0 or later will not support for positional arguments, which will break the related function call.
+This version (0.8.1) is not compatible with numpy later than 1.24.
+
+Download pre-trained DeepSpeech model files.  It is important that you use DeepSpeech version 0.7.0 model files to maintain consistency of evaluation.  Note that the DeepSpeech pip package we recommend is version 0.9.3 (which uses a more up-to-date CUDA), but this is compatible with version 0.7.x model files.
 ```
 curl -LO https://github.com/mozilla/DeepSpeech/releases/download/v0.7.0/deepspeech-0.7.0-models.pbmm
 curl -LO https://github.com/mozilla/DeepSpeech/releases/download/v0.7.0/deepspeech-0.7.0-models.scorer
@@ -45,7 +46,7 @@ curl -LO https://github.com/mozilla/DeepSpeech/releases/download/v0.7.0/deepspee
 
 (Optional) Training will be faster if you re-run the audio cleaning, which will save re-sampled audio so it doesn't have to be re-sampled every training run.
 ```
-python data_collection/clean_audio.py emg_data/nonparallel_data/* emg_data/silent_parallel_data/* emg_data/voiced_parallel_data/*
+python data_collection/clean_audio.py emg_data/nonparallel_data emg_data/silent_parallel_data emg_data/voiced_parallel_data
 ```
 
 ## Pre-trained Models

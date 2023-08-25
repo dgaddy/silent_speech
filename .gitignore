@@ -1,0 +1,4 @@
+emg_data/
+models/
+deepspeech-0.7.0-models.pbmm
+deepspeech-0.7.0-models.scorer

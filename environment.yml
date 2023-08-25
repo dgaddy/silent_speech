@@ -1,0 +1,28 @@
+name: dgaddy
+channels:
+  - conda-forge
+  - pytorch
+  - nvidia
+  - defaults
+dependencies:
+  - python=3.9
+  - notebook
+  - pytorch==1.13.1
+  - torchvision==0.14.1
+  - torchaudio==0.13.1
+  - pytorch-cuda=11.7
+  - libsndfile
+  - absl-py
+  - numpy=1.23
+  - librosa=0.8.1
+  - pysoundfile
+  - matplotlib
+  - scipy
+  - numba
+  - unidecode
+  - pip
+  - pip:
+    - jiwer
+    - deepspeech==0.9.3
+    - praat-textgrids
+    - noisereduce==1.1.0

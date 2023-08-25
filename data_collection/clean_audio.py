@@ -65,4 +65,5 @@ def clean_directory(directory):
 assert len(sys.argv) > 1, 'requires at least 1 argument: the directories to process'
 for i in range(1, len(sys.argv)):
     print('cleaning', sys.argv[i])
-    clean_directory(sys.argv[i])
+    for sub in os.listdir(sys.argv[i]):
+        clean_directory(os.path.join(sys.argv[i], sub))
