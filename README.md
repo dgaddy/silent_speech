@@ -85,9 +85,10 @@ Although the HiFi-GAN is technically fine-tuned for the output of a specific tra
 This section is about converting silent speech directly to text rather than synthesizing speech audio.
 The speech-to-text model uses the same neural architecture but with a CTC decoder, and achieves a WER of approximately 28% (as described in the dissertation [Voicing Silent Speech](https://www2.eecs.berkeley.edu/Pubs/TechRpts/2022/EECS-2022-68.pdf)).
 
-You will need to install the ctcdecode library in addition to the libraries listed above to use the recognition code.
+You will need to install the ctcdecode library (1.0.3) in addition to the libraries listed above to use the recognition code.
+(This package cannot be built successfully under Windows platform)
 ```
-pip install ctcdecode
+pip install git+https://github.com/parlance/ctcdecode.git
 ```
 
 And you will need to download a KenLM language model, such as this one from DeepSpeech:
