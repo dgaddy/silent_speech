@@ -1,9 +1,6 @@
 import numpy as np
-import scipy
 import matplotlib.pyplot as plt
 from numba import jit
-
-import torch
 
 @jit
 def time_warp(costs):

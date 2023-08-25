@@ -5,7 +5,6 @@ import logging
 import subprocess
 from ctcdecode import CTCBeamDecoder
 import jiwer
-import random
 
 import torch
 from torch import nn
@@ -14,7 +13,6 @@ import torch.nn.functional as F
 from read_emg import EMGDataset, SizeAwareSampler
 from architecture import Model
 from data_utils import combine_fixed_length, decollate_tensor
-from transformer import TransformerEncoderLayer
 
 from absl import flags
 FLAGS = flags.FLAGS
