@@ -32,11 +32,13 @@ HiFi-GAN has been included in the git submodule. (this replaces the WaveNet voco
 The rest of the required packages can be installed with pip or conda.
 ```
 conda install absl-py numpy=1.23 librosa=0.8.1 pysoundfile matplotlib scipy numba unidecode 
-pip install jiwer deepspeech==0.9.3 praat-textgrids noisereduce==1.1.0
+pip install jiwer==2.2.1 deepspeech==0.9.3 praat-textgrids noisereduce==1.1.0
 ```
 
 librosa 0.9.0 or later will not support for positional arguments, which will break the related function call.
 This version (0.8.1) is not compatible with numpy later than 1.24.
+
+jiwer 2.3.0 or later will not allow empty strings (see method **compute_measures**)
 
 Download pre-trained DeepSpeech model files.  It is important that you use DeepSpeech version 0.7.0 model files to maintain consistency of evaluation.  Note that the DeepSpeech pip package we recommend is version 0.9.3 (which uses a more up-to-date CUDA), but this is compatible with version 0.7.x model files.
 ```
