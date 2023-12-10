@@ -1,0 +1,8 @@
+[submodule "hifi-gan"]
+	path = hifi_gan
+	url = https://github.com/jik876/hifi-gan.git
+	branch = main
+[submodule "text_alignments"]
+	path = text_alignments
+	url = https://github.com/dgaddy/silent_speech_alignments.git
+    branch = main

@@ -1,9 +1,7 @@
 import re
 import os
 import numpy as np
-import matplotlib.pyplot as plt
 import random
-from collections import defaultdict
 import scipy
 import json
 import copy
@@ -13,9 +11,6 @@ import string
 import logging
 from functools import lru_cache
 from copy import copy
-
-import librosa
-import soundfile as sf
 
 import torch
 

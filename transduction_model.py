@@ -3,12 +3,10 @@ import sys
 import numpy as np
 import logging
 import subprocess
-import random
 
 import soundfile as sf
 
 import torch
-from torch import nn
 import torch.nn.functional as F
 
 from read_emg import EMGDataset, SizeAwareSampler

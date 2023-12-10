@@ -5,7 +5,6 @@ import logging
 import subprocess
 from ctcdecode import CTCBeamDecoder
 import jiwer
-import random
 
 import torch
 from torch import nn
@@ -14,7 +13,6 @@ import torch.nn.functional as F
 from read_emg import EMGDataset, SizeAwareSampler
 from architecture import Model
 from data_utils import combine_fixed_length, decollate_tensor
-from transformer import TransformerEncoderLayer
 
 from absl import flags
 FLAGS = flags.FLAGS
@@ -67,7 +65,7 @@ def train_model(trainset, devset, device, n_epochs=200):
     model = Model(devset.num_features, n_chars+1).to(device)
 
     if FLAGS.start_training_from is not None:
-        state_dict = torch.load(FLAGS.start_training_from)
+        state_dict = torch.load(FLAGS.start_training_from, map_location=torch.device(device))
         model.load_state_dict(state_dict, strict=False)
 
     optim = torch.optim.AdamW(model.parameters(), lr=FLAGS.learning_rate, weight_decay=FLAGS.l2)
@@ -114,7 +112,7 @@ def train_model(trainset, devset, device, n_epochs=200):
         logging.info(f'finished epoch {epoch_idx+1} - training loss: {train_loss:.4f} validation WER: {val*100:.2f}')
         torch.save(model.state_dict(), os.path.join(FLAGS.output_directory,'model.pt'))
 
-    model.load_state_dict(torch.load(os.path.join(FLAGS.output_directory,'model.pt'))) # re-load best parameters
+    model.load_state_dict(torch.load(os.path.join(FLAGS.output_directory,'model.pt'), map_location=torch.device(device))) # re-load best parameters
     return model
 
 def evaluate_saved():
@@ -122,7 +120,7 @@ def evaluate_saved():
     testset = EMGDataset(test=True)
     n_chars = len(testset.text_transform.chars)
     model = Model(testset.num_features, n_chars+1).to(device)
-    model.load_state_dict(torch.load(FLAGS.evaluate_saved))
+    model.load_state_dict(torch.load(FLAGS.evaluate_saved, map_location=torch.device(device)))
     print('WER:', test(model, testset, device))
 
 def main():
