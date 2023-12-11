@@ -2,6 +2,8 @@ import sys
 import os
 import logging
 
+import tqdm
+
 import torch
 from torch import nn
 
@@ -56,7 +58,7 @@ def main():
 
     vocoder = Vocoder()
 
-    for i, datapoint in enumerate(testset):
+    for i, datapoint in enumerate(tqdm.tqdm(testset, 'Generate outputs', disable=None)):
         save_output(ensemble, datapoint, os.path.join(FLAGS.output_directory, f'example_output_{i}.wav'), device, testset.mfcc_norm, vocoder)
 
     evaluate(testset, FLAGS.output_directory)

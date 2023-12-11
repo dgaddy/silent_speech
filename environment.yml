@@ -1,4 +1,4 @@
-name: dgaddy
+name: silent_speech
 channels:
   - conda-forge
   - pytorch
@@ -13,16 +13,17 @@ dependencies:
   - pytorch-cuda=11.8
   - libsndfile
   - absl-py
-  - numpy=1.23
-  - librosa=0.8.1
+  - numpy
+  - librosa
   - pysoundfile
   - matplotlib
   - scipy
   - numba
   - unidecode
+  - tqdm
   - pip
   - pip:
     - jiwer==2.2.1
     - deepspeech==0.9.3
     - praat-textgrids
-    - noisereduce==1.1.0
+    - noisereduce

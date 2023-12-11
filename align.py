@@ -2,7 +2,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from numba import jit
 
-@jit
+@jit(nopython=True)
 def time_warp(costs):
     dtw = np.zeros_like(costs)
     dtw[0,1:] = np.inf

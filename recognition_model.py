@@ -5,6 +5,7 @@ import logging
 import subprocess
 from ctcdecode import CTCBeamDecoder
 import jiwer
+import tqdm
 
 import torch
 from torch import nn
@@ -37,7 +38,7 @@ def test(model, testset, device):
     references = []
     predictions = []
     with torch.no_grad():
-        for example in dataloader:
+        for example in tqdm.tqdm(dataloader, 'Evaluate', disable=None):
             X = example['emg'].to(device)
             X_raw = example['raw_emg'].to(device)
             sess = example['session_ids'].to(device)
@@ -85,7 +86,7 @@ def train_model(trainset, devset, device, n_epochs=200):
     optim.zero_grad()
     for epoch_idx in range(n_epochs):
         losses = []
-        for example in dataloader:
+        for example in tqdm.tqdm(dataloader, 'Train step', disable=None):
             schedule_lr(batch_idx)
 
             X = combine_fixed_length(example['emg'], 200).to(device)

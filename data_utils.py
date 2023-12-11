@@ -17,7 +17,7 @@ flags.DEFINE_string('normalizers_file', 'normalizers.pkl', 'file with pickled fe
 phoneme_inventory = ['aa','ae','ah','ao','aw','ax','axr','ay','b','ch','d','dh','dx','eh','el','em','en','er','ey','f','g','hh','hv','ih','iy','jh','k','l','m','n','nx','ng','ow','oy','p','r','s','sh','t','th','uh','uw','v','w','y','z','zh','sil']
 
 def normalize_volume(audio):
-    rms = librosa.feature.rms(audio)
+    rms = librosa.feature.rms(y=audio)
     max_rms = rms.max() + 0.01
     target_rms = 0.2
     audio = audio * (target_rms/max_rms)
@@ -44,7 +44,7 @@ def mel_spectrogram(y, n_fft, num_mels, sampling_rate, hop_size, win_size, fmin,
 
     global mel_basis, hann_window
     if fmax not in mel_basis:
-        mel = librosa.filters.mel(sampling_rate, n_fft, num_mels, fmin, fmax)
+        mel = librosa.filters.mel(sr=sampling_rate, n_fft=n_fft, n_mels=num_mels, fmin=fmin, fmax=fmax)
         mel_basis[str(fmax)+'_'+str(y.device)] = torch.from_numpy(mel).float().to(y.device)
         hann_window[str(y.device)] = torch.hann_window(win_size).to(y.device)
 
@@ -72,7 +72,7 @@ def load_audio(filename, start=None, end=None, max_frames=None, renormalize_volu
     if renormalize_volume:
         audio = normalize_volume(audio)
     if r == 16000:
-        audio = librosa.resample(audio, 16000, 22050)
+        audio = librosa.resample(audio, orig_sr=16000, target_sr=22050)
     else:
         assert r == 22050
     audio = np.clip(audio, -1, 1) # because resampling sometimes pushes things out of range
@@ -99,9 +99,9 @@ def get_emg_features(emg_data, debug=False):
         r = np.abs(p)
 
         w_h = librosa.util.frame(w, frame_length=16, hop_length=6).mean(axis=0)
-        p_w = librosa.feature.rms(w, frame_length=16, hop_length=6, center=False)
+        p_w = librosa.feature.rms(y=w, frame_length=16, hop_length=6, center=False)
         p_w = np.squeeze(p_w, 0)
-        p_r = librosa.feature.rms(r, frame_length=16, hop_length=6, center=False)
+        p_r = librosa.feature.rms(y=r, frame_length=16, hop_length=6, center=False)
         p_r = np.squeeze(p_r, 0)
         z_p = librosa.feature.zero_crossing_rate(p, frame_length=16, hop_length=6, center=False)
         z_p = np.squeeze(z_p, 0)

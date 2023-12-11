@@ -5,6 +5,7 @@ import logging
 import subprocess
 
 import soundfile as sf
+import tqdm
 
 import torch
 import torch.nn.functional as F
@@ -38,7 +39,7 @@ def test(model, testset, device):
     phoneme_confusion = np.zeros((len(phoneme_inventory),len(phoneme_inventory)))
     seq_len = 200
     with torch.no_grad():
-        for batch in dataloader:
+        for batch in tqdm.tqdm(dataloader, 'Validation', disable=None):
             X = combine_fixed_length([t.to(device, non_blocking=True) for t in batch['emg']], seq_len)
             X_raw = combine_fixed_length([t.to(device, non_blocking=True) for t in batch['raw_emg']], seq_len*8)
             sess = combine_fixed_length([t.to(device, non_blocking=True) for t in batch['session_ids']], seq_len)
@@ -56,9 +57,9 @@ def test(model, testset, device):
 def save_output(model, datapoint, filename, device, audio_normalizer, vocoder):
     model.eval()
     with torch.no_grad():
-        sess = torch.tensor(datapoint['session_ids'], device=device).unsqueeze(0)
-        X = torch.tensor(datapoint['emg'], dtype=torch.float32, device=device).unsqueeze(0)
-        X_raw = torch.tensor(datapoint['raw_emg'], dtype=torch.float32, device=device).unsqueeze(0)
+        sess = datapoint['session_ids'].to(device=device).unsqueeze(0)
+        X = datapoint['emg'].to(dtype=torch.float32, device=device).unsqueeze(0)
+        X_raw = datapoint['raw_emg'].to(dtype=torch.float32, device=device).unsqueeze(0)
 
         pred, _ = model(X, X_raw, sess)
         y = pred.squeeze(0)
@@ -192,7 +193,7 @@ def train_model(trainset, devset, device, save_sound_outputs=True):
     batch_idx = 0
     for epoch_idx in range(n_epochs):
         losses = []
-        for batch in dataloader:
+        for batch in tqdm.tqdm(dataloader, 'Train step', disable=None):
             optim.zero_grad()
             schedule_lr(batch_idx)
 

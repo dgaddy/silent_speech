@@ -5,6 +5,7 @@ import numpy as np
 import noisereduce as nr
 import soundfile as sf
 import librosa
+import tqdm
 
 def clean_directory(directory):
     silence, rate = sf.read(os.path.join(directory, '0_audio.flac'))
@@ -23,9 +24,9 @@ def clean_directory(directory):
     assert len(audio_file_names) == len(all_audio_file_names), 'error discovering audio files'
 
     all_rmses = []
-    for fname in audio_file_names:
+    for fname in tqdm.tqdm(audio_file_names, 'Read for calibration', disable=None):
         data, rate = sf.read(fname)
-        rms = librosa.feature.rms(data)[0]
+        rms = librosa.feature.rms(y=data)[0]
         all_rmses.append(rms)
 
     silent_cutoff = 0.02
@@ -46,12 +47,12 @@ def clean_directory(directory):
     if is_silent:
         print('long run of quiet audio, skipping volume normalization')
 
-    for i, fname in enumerate(audio_file_names):
+    for i, fname in enumerate(tqdm.tqdm(audio_file_names, 'Clean data', disable=None)):
         data, rate = sf.read(fname)
 
-        clean = nr.reduce_noise(audio_clip=data, noise_clip=silence)
+        clean = nr.reduce_noise(y=data, sr=rate, y_noise=silence, stationary=True)
         if rate != 22050:
-            clean = librosa.resample(clean, rate, 22050)
+            clean = librosa.resample(clean, orig_sr=rate, target_sr=22050)
             rate = 22050
         if not is_silent:
             clean *= target_rms / smoothed_maxes[i]

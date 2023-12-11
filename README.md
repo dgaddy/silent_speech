@@ -12,35 +12,27 @@ The repository also includes code for directly converting silent speech to text.
 
 The EMG and audio data can be downloaded from <https://doi.org/10.5281/zenodo.4064408>.  The scripts expect the data to be located in a `emg_data` subdirectory by default, but the location can be overridden with flags (see the top of `read_emg.py`).
 
-Force-aligned phonemes from the Montreal Forced Aligner has been included in the git submodule.
-By default, this data is expected to be in a subdirectory `text_alignments`.
+Force-aligned phonemes from the Montreal Forced Aligner have been included as a git submodule, which must be updated using the process described in "Environment Setup" below.
 Note that there will not be an exception if the directory is not found, but logged phoneme prediction accuracies reporting 100% is a sign that the directory has not been loaded correctly.
 
 ## Environment Setup
 
-This code requires Python 3.8 or later.
-We strongly recommend running in a new Anaconda environment.
-
-First we will do some conda installs.  Your environment must use CUDA 11.8 or later to support RTX 4090.
+We strongly recommend running in Anaconda.
+To create a new environment with all required dependencies, run:
 ```
-conda install pytorch==2.0 torchvision torchaudio pytorch-cuda=11.8 -c pytorch -c nvidia
-conda install libsndfile -c conda-forge
+conda env create -f environment.yml
+conda activate silent_speech
 ```
+This will install with CUDA 11.8.
 
-HiFi-GAN has been included in the git submodule. (this replaces the WaveNet vocoder that was used in earlier versions).
-
-The rest of the required packages can be installed with pip or conda.
+You will also need to pull git submodules for Hifi-GAN and the phoneme alignment data, using the following commands:
 ```
-conda install absl-py numpy=1.23 librosa=0.8.1 pysoundfile matplotlib scipy numba unidecode 
-pip install jiwer==2.2.1 deepspeech==0.9.3 praat-textgrids noisereduce==1.1.0
+git submodule init
+git submodule update
+tar -xvzf text_alignments/text_alignments.tar.gz
 ```
 
-librosa 0.9.0 or later will not support for positional arguments, which will break the related function call.
-This version (0.8.1) is not compatible with numpy later than 1.24.
-
-jiwer 2.3.0 or later will not allow empty strings (see method **compute_measures**)
-
-Download pre-trained DeepSpeech model files.  It is important that you use DeepSpeech version 0.7.0 model files to maintain consistency of evaluation.  Note that the DeepSpeech pip package we recommend is version 0.9.3 (which uses a more up-to-date CUDA), but this is compatible with version 0.7.x model files.
+Use the following commands to download pre-trained DeepSpeech model files for evaluation.  It is important that you use DeepSpeech version 0.7.0 model files for evaluation numbers to be consistent with the original papers.  Note that more recent DeepSpeech packages such as version 0.9.3 can be used as long as they are compatible with version 0.7.x model files.
 ```
 curl -LO https://github.com/mozilla/DeepSpeech/releases/download/v0.7.0/deepspeech-0.7.0-models.pbmm
 curl -LO https://github.com/mozilla/DeepSpeech/releases/download/v0.7.0/deepspeech-0.7.0-models.scorer

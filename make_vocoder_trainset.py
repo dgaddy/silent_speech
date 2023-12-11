@@ -38,7 +38,7 @@ def main():
                 np.save(os.path.join(FLAGS.output_directory, 'mels', f'{name_prefix}_output_{i}.npy'), spec)
                 audio, r = sf.read(datapoint['audio_file'])
                 if r != 22050:
-                    audio = librosa.resample(audio, r, 22050, res_type='kaiser_fast')
+                    audio = librosa.resample(audio, orig_sr=r, target_sr=22050, res_type='kaiser_fast')
                 audio = np.clip(audio, -1, 1) # because resampling sometimes pushes things out of range
                 sf.write(os.path.join(FLAGS.output_directory, 'wavs', f'{name_prefix}_output_{i}.wav'), audio, 22050)
                 filelist.write(f'{name_prefix}_output_{i}\n')
